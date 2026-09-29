@@ -1,0 +1,14 @@
+model: anthropic/claude-sonnet-4-6
+# pick any LiteLLM model string:
+# model: gemini/gemini-2.5-pro
+# model: gpt-4o
+# model: ollama/llama3.1
+# model: zhipu/glm-4-plus
+
+# fallback: if the primary model errors, try this one
+# fallback_model: gemini/gemini-2.5-pro
+
+permissions:
+  exec: ask
+  write_file: ask
+  read_file: allow
