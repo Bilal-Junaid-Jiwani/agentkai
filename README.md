@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/agentkai-logo.gif" width="160" height="160" alt="agentkai logo — animated fluffy mascot">
+</p>
+
 # agentkai
 
 An open-source personal AI agent. Model-agnostic by design: bring your own model —
