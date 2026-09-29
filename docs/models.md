@@ -1,6 +1,6 @@
 # Models
 
-open-agent is model-agnostic. The provider layer is LiteLLM, so one agent
+agentkai is model-agnostic. The provider layer is LiteLLM, so one agent
 codebase works with 100+ models. The user picks the model; everything else
 (tools, memory, scheduler, dashboard) stays the same.
 
@@ -17,13 +17,13 @@ codebase works with 100+ models. The user picks the model; everything else
 ## Switch models
 
 ```bash
-open-agent --model gemini/gemini-2.5-pro "summarize this folder"
-open-agent --model ollama/llama3.1 "draft a reply"
+agentkai --model gemini/gemini-2.5-pro "summarize this folder"
+agentkai --model ollama/llama3.1 "draft a reply"
 ```
 
 ## Notes
 
 - Tool-calling quality varies by model: frontier models (Claude/Gemini/GPT)
   are reliable; small local models may need simpler tool schemas.
-- Aliases and fallbacks can be configured in `~/.open-agent/config.yaml`
+- Aliases and fallbacks can be configured in `~/.agentkai/config.yaml`
   (planned).

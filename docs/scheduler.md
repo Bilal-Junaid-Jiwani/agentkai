@@ -1,6 +1,6 @@
 # Scheduler
 
-Background jobs in SQLite (`~/.open-agent/scheduler.db`).
+Background jobs in SQLite (`~/.agentkai/scheduler.db`).
 
 - One-shot and cron-style recurring jobs
 - A runner executes due jobs (shell commands or agent prompts)

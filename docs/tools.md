@@ -15,10 +15,10 @@ browser automation, third-party APIs. Write tools are trust-tier gated
 
 Reusable playbooks as markdown files (e.g. Gmail triage, shopping research).
 The agent reads the skill file and follows it. Skills live in
-`~/.open-agent/skills/`.
+`~/.agentkai/skills/`.
 
 ## Permissions
 
 Risk-based gate per tool call: `allow` (read-only), `ask` (writes, sends),
-`deny` (destructive without approval). Configured in `~/.open-agent/config.yaml`
+`deny` (destructive without approval). Configured in `~/.agentkai/config.yaml`
 (planned).

@@ -1,7 +1,7 @@
-# open-agent docs
+# agentkai docs
 
 Original documentation for this project — same topics as a full personal-agent
-product reference, written for open-agent.
+product reference, written for agentkai.
 
 - [models.md](models.md) — supported models & provider setup
 - [tools.md](tools.md) — built-in tools, MCP servers, skills

@@ -1,4 +1,4 @@
-# open-agent
+# agentkai
 
 An open-source personal AI agent. Model-agnostic by design: bring your own model —
 Claude, Gemini, GPT, Ollama (local), GLM, or anything LiteLLM speaks — and the
@@ -18,12 +18,12 @@ follows the phased plan in `research/ARCHITECTURE.md`.
 ```bash
 pip install -e .
 export ANTHROPIC_API_KEY=...   # or GOOGLE_API_KEY / OPENAI_API_KEY, etc.
-open-agent --model anthropic/claude-sonnet-4-6 "hello"
+agentkai --model anthropic/claude-sonnet-4-6 "hello"
 ```
 
 ## Layout
 
-- `src/open_agent/` — agent loop, provider abstraction, tools, memory, scheduler, dashboard
+- `src/agentkai/` — agent loop, provider abstraction, tools, memory, scheduler, dashboard
 - `docs/` — user documentation for every feature (original docs for this project)
 - `research/` — architecture research and case studies
 - `examples/` — example configs and skills

@@ -1,11 +1,11 @@
-"""CLI: `open-agent` command."""
+"""CLI: `agentkai` command."""
 from __future__ import annotations
 
 import typer
 
 from .agent import Agent
 
-app = typer.Typer(help="open-agent — model-agnostic personal AI agent")
+app = typer.Typer(help="agentkai — model-agnostic personal AI agent")
 
 
 @app.command()

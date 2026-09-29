@@ -11,7 +11,7 @@ the user just names the model, e.g.::
     zhipu/glm-4-plus
 
 API keys come from the environment (ANTHROPIC_API_KEY, GOOGLE_API_KEY,
-OPENAI_API_KEY, ...) or from ``~/.open-agent/config.yaml``.
+OPENAI_API_KEY, ...) or from ``~/.agentkai/config.yaml``.
 """
 from __future__ import annotations
 

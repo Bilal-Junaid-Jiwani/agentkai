@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 class Memory:
-    def __init__(self, root: str | Path = "~/.open-agent/memory"):
+    def __init__(self, root: str | Path = "~/.agentkai/memory"):
         self.root = Path(root).expanduser()
         self.root.mkdir(parents=True, exist_ok=True)
 

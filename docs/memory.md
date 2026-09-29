@@ -1,6 +1,6 @@
 # Memory
 
-Plain markdown files in `~/.open-agent/memory/`. Human-editable, git-friendly.
+Plain markdown files in `~/.agentkai/memory/`. Human-editable, git-friendly.
 
 - `SOUL.md` — the agent's persona
 - `USER.md` — who the user is, preferences

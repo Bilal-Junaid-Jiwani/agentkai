@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS jobs (
 
 
 class Scheduler:
-    def __init__(self, db: str | Path = "~/.open-agent/scheduler.db"):
+    def __init__(self, db: str | Path = "~/.agentkai/scheduler.db"):
         self.db_path = Path(db).expanduser()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(self.db_path)
