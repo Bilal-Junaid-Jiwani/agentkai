@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agentkai — webchat</title>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --accent:#f59e0b; --text:#e8eaf0;
+          --dim:#9aa0ae; --bubble-in:#232833; --bubble-out:#3a2c10; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font-family:system-ui,-apple-system,"Segoe UI",sans-serif;
+         display:flex; flex-direction:column; height:100vh; }
+  header { padding:12px 18px; background:var(--panel);
+           border-bottom:1px solid #262b36; display:flex; align-items:center;
+           gap:10px; }
+  header .dot { width:10px; height:10px; border-radius:50%;
+                background:var(--accent); }
+  header h1 { font-size:16px; margin:0; font-weight:600; }
+  header .status { margin-left:auto; font-size:12px; color:var(--dim); }
+  #log { flex:1; overflow-y:auto; padding:18px; display:flex;
+         flex-direction:column; gap:10px; max-width:760px; width:100%;
+         margin:0 auto; }
+  .msg { max-width:75%; padding:10px 14px; border-radius:14px;
+         white-space:pre-wrap; word-wrap:break-word; line-height:1.45;
+         font-size:14px; }
+  .msg.in { align-self:flex-start; background:var(--bubble-in);
+            border-bottom-left-radius:4px; }
+  .msg.out { align-self:flex-end; background:var(--bubble-out);
+             border:1px solid #57431c; border-bottom-right-radius:4px; }
+  .typing { align-self:flex-start; color:var(--dim); font-size:13px;
+            font-style:italic; }
+  form { display:flex; gap:8px; padding:14px 18px; background:var(--panel);
+         border-top:1px solid #262b36; max-width:760px; width:100%;
+         margin:0 auto; }
+  input { flex:1; background:#0f1115; border:1px solid #2c323e; color:var(--text);
+          border-radius:10px; padding:10px 14px; font-size:14px; outline:none; }
+  input:focus { border-color:var(--accent); }
+  button { background:var(--accent); border:none; border-radius:10px;
+           padding:10px 20px; font-weight:600; cursor:pointer; color:#111; }
+</style>
+</head>
+<body>
+<header>
+  <span class="dot"></span><h1>agentkai</h1>
+  <span class="status" id="status">connecting…</span>
+</header>
+<div id="log"></div>
+<form id="form">
+  <input id="input" autocomplete="off" placeholder="Message agentkai…" />
+  <button type="submit">Send</button>
+</form>
+<script>
+(function () {
+  var peer = "web-" + Math.random().toString(36).slice(2, 10);
+  var log = document.getElementById("log");
+  var status = document.getElementById("status");
+  var form = document.getElementById("form");
+  var input = document.getElementById("input");
+  var typingEl = null;
+
+  function addMsg(text, cls) {
+    var d = document.createElement("div");
+    d.className = "msg " + cls;
+    d.textContent = text;
+    log.appendChild(d);
+    log.scrollTop = log.scrollHeight;
+  }
+  function setTyping(on) {
+    if (on && !typingEl) {
+      typingEl = document.createElement("div");
+      typingEl.className = "typing";
+      typingEl.textContent = "agentkai is thinking…";
+      log.appendChild(typingEl);
+      log.scrollTop = log.scrollHeight;
+    } else if (!on && typingEl) {
+      typingEl.remove();
+      typingEl = null;
+    }
+  }
+
+  var ws = new WebSocket("ws://" + location.host + "/");
+  ws.onopen = function () {
+    status.textContent = "connected";
+    ws.send(JSON.stringify({type: "hello", peer_id: peer}));
+  };
+  ws.onclose = function () { status.textContent = "disconnected"; };
+  ws.onmessage = function (ev) {
+    var m;
+    try { m = JSON.parse(ev.data); } catch (e) { return; }
+    if (m.type === "msg") { setTyping(false); addMsg(m.text, "in"); }
+    else if (m.type === "typing") { setTyping(!!m.on); }
+    else if (m.type === "error") { addMsg("Error: " + m.text, "in"); }
+  };
+  form.onsubmit = function (e) {
+    e.preventDefault();
+    var t = input.value.trim();
+    if (!t || ws.readyState !== 1) return;
+    ws.send(JSON.stringify({type: "msg", text: t}));
+    addMsg(t, "out");
+    input.value = "";
+  };
+})();
+</script>
+</body>
+</html>

@@ -4,33 +4,109 @@
 
 # agentkai
 
-An open-source personal AI agent. Model-agnostic by design: bring your own model —
-Claude, Gemini, GPT, Ollama (local), GLM, or anything LiteLLM speaks — and the
-agent keeps the same tools, memory, scheduler, and dashboard.
+An open-source personal AI agent that runs on your own computer.
+Model-agnostic by design: bring your own model — Claude, Gemini, GPT,
+Ollama (local), GLM, or anything LiteLLM speaks — and the agent keeps
+the same tools, memory, scheduler, and dashboard.
 
-Inspired by the architecture of modern personal AI assistants: an agent loop over
-a tool registry, markdown-file memory, background scheduling, MCP tool servers,
-and a local web dashboard.
+```
+                    ┌─────────────┐
+                    │    You      │
+                    └──────┬──────┘
+        ┌──────────────────┼──────────────────┐
+        ▼                  ▼                  ▼
+  ┌───────────┐     ┌─────────────┐     ┌─────────────┐
+  │   CLI     │     │  Dashboard  │     │   Gateway   │
+  │agentkai   │     │ 127.0.0.1   │     │ Telegram /  │
+  │run · chat │     │ token-auth  │     │ Discord /   │
+  └─────┬─────┘     └──────┬──────┘     │ WebChat /   │
+        │                  │            │ WhatsApp*   │
+        └──────────────────┼────────────┴──────┬──────┘
+                           ▼                   ▼
+                    ┌──────────────────────────────┐
+                    │        Agent loop            │
+                    │  think → tool-call → observe │
+                    │  streaming · timeouts ·      │
+                    │  approval gates · event log  │
+                    └──────────────┬───────────────┘
+        ┌────────────┬─────────────┼──────────────┬────────────┐
+        ▼            ▼             ▼              ▼            ▼
+  ┌──────────┐ ┌──────────┐ ┌────────────┐ ┌──────────┐ ┌──────────┐
+  │ Providers│ │  Tools   │ │  Browser   │ │  Memory  │ │Scheduler │
+  │ Claude   │ │ exec etc │ │ Chromium   │ │ markdown │ │ cron ·   │
+  │ Gemini   │ │ MCP      │ │ real pages │ │ SOUL/USER│ │ heartbeat│
+  │ GPT/Oll. │ │ 12 skills│ │ clicks/forms│ │ daily log│ │ dreaming │
+  └──────────┘ └──────────┘ └────────────┘ └──────────┘ └──────────┘
+```
 
-## Status
+\* WhatsApp via an experimental user-run bridge sidecar.
 
-🚧 Early scaffold — the architecture research is in `research/` and the build
-follows the phased plan in `research/ARCHITECTURE.md`.
+## Features
 
-## Quick start (scaffold)
+- **Model-agnostic** — aliases (`claude`, `gemini`, `gpt`, `glm`,
+  `local`) with fallbacks, capability probing, BYOK keys that are never
+  logged. Fully offline with Ollama.
+- **Real tools** — shell/filesystem (root-scoped, blocklisted), a real
+  Chromium browser, MCP client (stdio + SSE), 12 bundled skills (Gmail,
+  Calendar, GitHub, Spotify, places, images, voice, media, payments,
+  shopping, travel, health).
+- **Permission gates** — risk-based allow/ask/deny on every tool call,
+  audited. Unattended jobs can never run high-risk tools.
+- **Markdown memory** — SOUL/USER/MEMORY.md, daily logs, people & groups,
+  keyword search. Plain files you can edit and git.
+- **Scheduler** — cron/at jobs, heartbeat check-ins, nightly dreaming
+  (memory consolidation), all in SQLite.
+- **Messaging gateway** — Telegram, Discord, built-in WebChat, and an
+  experimental WhatsApp bridge; per-session isolation, owner approvals
+  via `APPROVE`/`DENY`.
+- **Local dashboard** — FastAPI on 127.0.0.1 only, per-launch token,
+  offline SPA, live SSE streaming, run replay.
+- **Voice & media** — faster-whisper / OpenAI STT+TTS; image generation
+  via OpenAI (paid) or local Stable Diffusion. Honest errors when
+  nothing is configured — nothing faked.
+- **Devices & goals** — pair your phone via the companion-app contract;
+  durable goals and tracked items with a daily briefing prompt.
+
+## Quick start
 
 ```bash
-pip install -e .
-export ANTHROPIC_API_KEY=...   # or GOOGLE_API_KEY / OPENAI_API_KEY, etc.
-agentkai --model anthropic/claude-sonnet-4-6 "hello"
+pip install agentkai
+export ANTHROPIC_API_KEY=...   # or GEMINI_API_KEY / OPENAI_API_KEY / ZHIPUAI_API_KEY
+agentkai run "summarize what's in ~/Documents" --model claude
+agentkai dashboard             # local UI at http://127.0.0.1:8931/
 ```
+
+No key? Install [Ollama](https://ollama.com), `ollama pull qwen3:32b`,
+then `agentkai run "hello" --model local` — fully offline.
+
+Full guide: [`docs/quickstart.md`](docs/quickstart.md) ·
+all docs: [`docs/index.md`](docs/index.md)
 
 ## Layout
 
-- `src/agentkai/` — agent loop, provider abstraction, tools, memory, scheduler, dashboard
-- `docs/` — user documentation for every feature (original docs for this project)
+- `src/agentkai/` — the package: agent loop, providers, tools, browser,
+  channels, dashboard, devices, memory, scheduler, skills, voice, media,
+  goals, widgets
+- `docs/` — user documentation for every feature (original docs)
 - `research/` — architecture research and case studies
 - `examples/` — example configs and skills
+
+## Status
+
+v0.1.0 — core flows (agent runs, tools, memory, scheduler, dashboard,
+channels) are implemented and tested. Items marked **experimental** in
+the docs (WhatsApp bridge, video generation) are real code with real
+limits. See [`docs/troubleshooting.md`](docs/troubleshooting.md) for
+known gaps.
+
+## Development
+
+```bash
+git clone https://github.com/Bilal-Junaid-Jiwani/agentkai
+cd agentkai
+python -m venv .venv && .venv/bin/pip install -e ".[test,voice]"
+.venv/bin/python -m pytest tests/   # full suite
+```
 
 ## License
 

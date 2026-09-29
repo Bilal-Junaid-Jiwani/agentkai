@@ -1,0 +1,1 @@
+{"dependencies":{"express":"^4.19.0","qrcode-terminal":"^0.12.0","whatsapp-web.js":"^1.26.0"},"description":"Experimental WhatsApp Web bridge for the agentkai messaging gateway","license":"Apache-2.0","main":"server.js","name":"agentkai-whatsapp-sidecar","private":true,"version":"0.1.0"}
