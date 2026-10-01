@@ -7,7 +7,8 @@
 [![PyPI](https://img.shields.io/pypi/v/agentkai.svg)](https://pypi.org/project/agentkai/)
 [![Python](https://img.shields.io/pypi/pyversions/agentkai.svg)](https://pypi.org/project/agentkai/)
 [![License](https://img.shields.io/github/license/Bilal-Junaid-Jiwani/agentkai.svg)](https://github.com/Bilal-Junaid-Jiwani/agentkai/blob/main/LICENSE)
-[![Docs](https://img.shields.io/badge/docs-website-F59E0B)](https://github.com/Bilal-Junaid-Jiwani/agentkai/tree/main/docs)
+[![Docs](https://img.shields.io/badge/docs-website-F59E0B)](https://bilal-junaid-jiwani.github.io/agentkai/)
+[![Website](https://img.shields.io/badge/website-live-0ea5e9)](https://bilal-junaid-jiwani.github.io/agentkai/site/)
 
 **An open-source personal AI agent that runs on your own computer.**
 
