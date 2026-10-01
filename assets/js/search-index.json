@@ -1,0 +1,466 @@
+[
+ {
+  "url": "quickstart.html",
+  "title": "Quickstart",
+  "eyebrow": "Getting started",
+  "description": "Get from zero to a working agent in a few minutes.",
+  "headings": [
+   {
+    "id": "1-install",
+    "text": "1. Install"
+   },
+   {
+    "id": "2-pick-a-model-byok",
+    "text": "2. Pick a model (BYOK)"
+   },
+   {
+    "id": "3-first-run",
+    "text": "3. First run"
+   },
+   {
+    "id": "4-open-the-dashboard",
+    "text": "4. Open the dashboard"
+   },
+   {
+    "id": "5-talk-from-your-phone-optional",
+    "text": "5. Talk from your phone (optional)"
+   },
+   {
+    "id": "6-make-it-remember",
+    "text": "6. Make it remember"
+   },
+   {
+    "id": "7-automate",
+    "text": "7. Automate"
+   },
+   {
+    "id": "whats-next",
+    "text": "What's next"
+   }
+  ],
+  "text": "Get from zero to a working agent in a few minutes. 1. Install Requires Python 3.10+. pip install agentkai Or from source: git clone https://github.com/Bilal-Junaid-Jiwani/agentkai cd agentkai pip install . Verify: agentkai --help 2. Pick a model (BYOK) AgentKai has no model of its own — you bring your own key. Set the key for the provider you want: Provider Key env var Alias Anthropic Claude ANTHROPIC_API_KEY claude Google Gemini GEMINI_API_KEY (or GOOGLE_API_KEY ) gemini OpenAI GPT OPENAI_API_KEY gpt Zhipu GLM ZHIPUAI_API_KEY glm Ollama (local, free) none — runs on your PC local export ANTHROPIC_API_KEY=sk-ant-... agentkai models # shows aliases + which keys are set For fully local, install Ollama , pull a model ( ollama pull qwen3:32b ), and use --model local — no key, no network, no cost. 3. First run agentkai run \"list the files in my home directory and summarize what this machine is used for\" The answer streams as the model thinks. When a tool needs your approval (medium/high risk), the CLI asks in the terminal. Pass -y to auto-approve — only do this when you trust the task. One-shot answer without the loop UI: agentkai chat \"what day is it?\" --model gemini 4. Open the dashboard agentkai dashboard This prints a one-time URL like http://127.0.0.1:8931/?token=… . The dashboard binds 127.0.0.1 only (never your LAN, never the internet) and requires the per-launch token. It shows chat, run history with event timelines, memory files, and scheduler jobs. See dashboard.md . 5. Talk from your phone (optional) agentkai gateway Starts the messaging gateway with WebChat on http://127.0.0.1:18790/ . Enable Telegram/Discord in ~/.agentkai/channels.yaml to chat from those apps. See channels.md . 6. Make it remember Memory is plain markdown in ~/.agentkai/memory/ . Edit USER.md to tell the agent who you are; it appends daily logs itself. See memory.md . 7. Automate agentkai scheduler add morning-brief --schedule \"0 7 * * *\" \\ --prompt \"Summarize today's calendar and any unread important email.\" agentkai scheduler list Jobs run even when you're not watching (see scheduler.md ). What's next models.md — fallbacks, custom aliases, capability probing tools.md — what the agent can do, and how approvals work skills.md — Gmail, Calendar, GitHub, Spotify and more privacy.md — where your data and keys live"
+ },
+ {
+  "url": "models.html",
+  "title": "Models",
+  "eyebrow": "Getting started",
+  "description": "AgentKai is model-agnostic. The provider layer is LiteLLM, so one agent codebase works with 100+ models. You pick the model per run, per job, or per channel; everything else (tools, memory, scheduler, dashboard) stays the same.",
+  "headings": [
+   {
+    "id": "aliases",
+    "text": "Aliases"
+   },
+   {
+    "id": "key-setup-byok",
+    "text": "Key setup (BYOK)"
+   },
+   {
+    "id": "fallbacks",
+    "text": "Fallbacks"
+   },
+   {
+    "id": "capabilities",
+    "text": "Capabilities"
+   },
+   {
+    "id": "choosing",
+    "text": "Choosing"
+   }
+  ],
+  "text": "AgentKai is model-agnostic. The provider layer is LiteLLM, so one agent codebase works with 100+ models. You pick the model per run, per job, or per channel; everything else (tools, memory, scheduler, dashboard) stays the same. Aliases Short names so you don't memorize provider strings. Run agentkai models to see the live table (including your own custom aliases). Alias Resolves to Key claude anthropic/claude-sonnet-4-6 ANTHROPIC_API_KEY claude-opus anthropic/claude-opus-4-6 ANTHROPIC_API_KEY gemini gemini/gemini-2.5-flash GEMINI_API_KEY (or GOOGLE_API_KEY ) gemini-pro gemini/gemini-2.5-pro GEMINI_API_KEY gpt gpt-4o OPENAI_API_KEY gpt-mini gpt-4o-mini OPENAI_API_KEY glm zhipu/glm-4-plus ZHIPUAI_API_KEY local ollama/qwen3:32b none (your PC) fast gemini/gemini-2.5-flash GEMINI_API_KEY Anything that isn't an alias passes through to LiteLLM unchanged, so agentkai run --model \"anthropic/claude-sonnet-4-6\" works too. Key setup (BYOK) Keys come from the environment first — this is the recommended way: export ANTHROPIC_API_KEY=sk-ant-... export GEMINI_API_KEY=... export OPENAI_API_KEY=... export ZHIPUAI_API_KEY=... Alternatively, ~/.agentkai/config.yaml holds non-secret settings plus optional key configuration: providers: ollama: base_url: http://localhost:11434 # default; change for remote Ollama models: aliases: workhorse: anthropic/claude-sonnet-4-6 # your own aliases Environment always wins over the file. Keys are never printed or logged — agentkai models shows only set / missing per provider. See privacy.md . Fallbacks Each alias has a fallback chain: if the primary model errors (rate limit, outage, bad key), the request retries on the next model in the chain automatically. The chain is defined per alias in the provider module; your custom aliases in config.yaml can set their own. Capabilities Before trusting a model with tool-heavy work, AgentKai can probe it: one tiny request (\"reply with the single word: ok\") checks that tool calling and streaming actually work, and the result is cached on disk. The agent loop also normalizes tool calls across providers — Anthropic native calls and OpenAI-style function calls arrive at your tools in the same shape — so tools never care which model is behind them. Small local models vary: some Ollama models handle tools well, some don't. If a local model ignores tool calls, try a larger one or switch aliases. agentkai run fails cleanly (exit 1, readable error) when the provider is unreachable — e.g. --model local without Ollama running — instead of hanging. Choosing Best reasoning / default: claude Cheap + fast: gemini (flash) or gpt-mini Private / offline: local (needs Ollama running; quality depends on the model you pulled) China-region APIs: glm Cost and data handling are between you and the provider: hosted models send your prompts to that provider's API. If that matters, use local ."
+ },
+ {
+  "url": "dashboard.html",
+  "title": "Dashboard",
+  "eyebrow": "Getting started",
+  "description": "The local web dashboard: chat with the agent, watch runs stream, replay past runs event-by-event, browse memory, and inspect scheduler jobs — all in the browser, all offline.",
+  "headings": [
+   {
+    "id": "security-posture",
+    "text": "Security posture"
+   },
+   {
+    "id": "pages",
+    "text": "Pages"
+   },
+   {
+    "id": "under-the-hood",
+    "text": "Under the hood"
+   },
+   {
+    "id": "api",
+    "text": "API"
+   }
+  ],
+  "text": "The local web dashboard: chat with the agent, watch runs stream, replay past runs event-by-event, browse memory, and inspect scheduler jobs — all in the browser, all offline. agentkai dashboard # default http://127.0.0.1:8931/ agentkai dashboard --port 9000 Security posture Binds 127.0.0.1 only — passing any other host is refused. It is not reachable from your LAN or the internet, by design. A fresh random token is generated per launch, printed once by the CLI, and required on every data request (query param ?token= or Authorization: Bearer header). Wrong token → 401. The token is never logged (uvicorn access log is disabled). The SPA is fully offline : no CDN, no external fonts, no analytics. The only network the page touches is the dashboard itself. Pages Chat — send a prompt, watch the answer stream token-by-token over SSE, with tool calls shown inline as they happen. Runs — every run's history with a full event timeline (messages, tool calls, results, approvals). Replay any finished run. Memory — browse SOUL/USER/MEMORY.md and daily logs. Scheduler — inspect jobs from the real scheduler database. Under the hood The backend is FastAPI; the frontend is a small dependency-free SPA in src/agentkai/dashboard/static/ . Runs emit an append-only event log ( ~/.agentkai/runs/<run_id>/events.jsonl ); the dashboard replays and live-streams those events over Server-Sent Events. Honest v1 note: the chat page currently streams from a stubbed run simulation while the real agent-core wiring lands — the API contract ( src/agentkai/dashboard/API.md ) is stable and won't change when the real loop is plugged in. Scheduler and memory pages already read the real stores. API The full endpoint contract is documented in src/agentkai/dashboard/API.md (installed with the package): auth, event shapes, and every /api/* endpoint, plus the planned additions (memory editing, approval cards). Scheduler job management (create, delete, manual run) shipped in v0.2.0 and is documented there too."
+ },
+ {
+  "url": "tools.html",
+  "title": "Tools",
+  "eyebrow": "User guide",
+  "description": "Tools are what the agent can do. Every tool is a plain Python callable described by a JSON Schema, so every model provider that supports function calling (via LiteLLM) gets the same toolset. Tool calls are normalized across providers — the tools never know which model is behind them.",
+  "headings": [
+   {
+    "id": "built-in-tools",
+    "text": "Built-in tools"
+   },
+   {
+    "id": "safety-model",
+    "text": "Safety model"
+   },
+   {
+    "id": "the-permission-gate",
+    "text": "The permission gate"
+   },
+   {
+    "id": "mcp-servers",
+    "text": "MCP servers"
+   },
+   {
+    "id": "writing-your-own-tool",
+    "text": "Writing your own tool"
+   }
+  ],
+  "text": "Tools are what the agent can do . Every tool is a plain Python callable described by a JSON Schema, so every model provider that supports function calling (via LiteLLM) gets the same toolset. Tool calls are normalized across providers — the tools never know which model is behind them. Built-in tools Tool What it does Risk exec Run a shell command (timeout, cwd-scoped, destructive-command blocklist) high read_file Read a text file (offset/limit paging) low write_file Write/append a file (overwrite or append) medium list_dir List directory entries low fetch_url GET a web page as text (size-capped) medium Plus capability modules that add their own tools: browser — navigation, clicking, forms, screenshots, downloads ( browser.md ) MCP — any configured MCP server's tools, prefixed mcp_<server>_<tool> skills — each loaded skill contributes its tools ( skills.md ) devices — device_notify , SMS/contacts/calendar via the companion app ( devices.md ) voice — transcribe_audio , speak_text ( voice.md ) media — generate_image , edit_image , experimental generate_video ( media.md ) goals — goal/tracked-item management for the agent ( goals.md ) widgets — render_widget : option buttons, forms, cards, map pins in chat Safety model File and shell tools are root-scoped : paths are resolved (symlinks included) and must stay inside the allowed roots — .. escapes and symlink tricks are rejected. exec additionally refuses obviously destructive commands ( rm -rf / , disk wipes, fork bombs). This is a blocklist, not a sandbox: it stops accidents and casual abuse, not a determined attacker. fetch_url refuses non-HTTP(S) URLs, embedded credentials, and non-public hosts, and re-validates every redirect hop. The permission gate Every tool call passes through a risk-based gate with three decisions: low risk (reading files, listings) → allowed automatically medium / high risk → the gate asks you first anything you configure → allowed or denied by policy In the terminal, \"ask\" means an interactive prompt. In the messaging gateway, the owner gets an APPROVE <id> / DENY <id> message ( channels.md ). Every decision is auditable. Policy overrides live in code or config: PermissionGate(policy={ \"risk:high\": \"deny\", # non-interactive lockdown \"tool:exec\": \"ask\", # always ask for shell, even if policy says allow }) Tool-specific entries beat risk-level entries, which beat the built-in defaults. Scheduled (unattended) jobs run with low/medium auto-allowed and high denied — a cron job can never prompt you, and can never run a high-risk tool. Pass agentkai run -y only when you consciously accept auto-approval. MCP servers AgentKai is an MCP client (no MCP server is bundled). Configure servers in ~/.agentkai/mcp.json : { \"servers\": { \"my-db\": { \"transport\": \"stdio\", \"command\": \"python\", \"args\": [\"-m\", \"my_mcp_server\"] } } } On startup the agent connects every configured server (stdio or SSE), lists its tools, and exposes them as mcp_<server>_<tool> . A server that fails to start is skipped with a warning — one bad server can't take down the agent. Writing your own tool from agentkai.tools import Tool def reverse(text: str) -> str: return text[::-1] tool = Tool( name=\"reverse\", description=\"Reverse a string.\", json_schema={\"type\": \"object\", \"properties\": {\"text\": {\"type\": \"string\"}}, \"required\": [\"text\"]}, risk=\"low\", func=reverse, ) Register it on a Registry and hand the registry to the Agent . For reusable, documented, installable capabilities, package it as a skill instead."
+ },
+ {
+  "url": "browser.html",
+  "title": "Browser",
+  "eyebrow": "User guide",
+  "description": "The agent drives a real Chromium (via Playwright) — not a text scraper. It can navigate, read rendered pages, click, fill forms, take screenshots, go back, and download files. Logins persist in the browser profile, so signing in once keeps working across runs.",
+  "headings": [
+   {
+    "id": "tools",
+    "text": "Tools"
+   },
+   {
+    "id": "setup",
+    "text": "Setup"
+   },
+   {
+    "id": "safety-notes",
+    "text": "Safety notes"
+   },
+   {
+    "id": "limits",
+    "text": "Limits"
+   }
+  ],
+  "text": "The agent drives a real Chromium (via Playwright) — not a text scraper. It can navigate, read rendered pages, click, fill forms, take screenshots, go back, and download files. Logins persist in the browser profile, so signing in once keeps working across runs. Tools Tool What it does browser_goto Navigate to a URL (http/https only; credentials-in-URL rejected) browser_read Read the rendered page as text browser_click Click an element (by selector or visible text) browser_fill Fill a form field browser_screenshot Capture a screenshot to a file browser_back Go back in history browser_download Download a file to a chosen directory (no path collisions) The session starts lazily on first use and stays alive for the run. Pass headless=False when constructing a BrowserSession in code to watch the agent work in a visible window. Setup Playwright needs its Chromium build: pip install playwright playwright install chromium Without it, browser tools raise a clear BrowserUnavailable error — they never pretend to work. Safety notes Only http / https URLs; anything else is rejected. Downloads land in a directory you choose; filenames are de-duplicated, never overwritten silently. Like every tool, browser actions go through the permission gate: navigation/reading are low risk, form fills and downloads ask first. The agent does not bypass CAPTCHAs or access controls for you, and it won't exfiltrate credentials — login cookies stay in the local profile directory ( ~/.agentkai/browser-profile/ ). Limits JavaScript-heavy single-page apps sometimes need a wait/retry; the tools surface timeouts as errors rather than hanging. No built-in proxy support in v1; the browser uses your machine's network directly."
+ },
+ {
+  "url": "memory.html",
+  "title": "Memory",
+  "eyebrow": "User guide",
+  "description": "AgentKai's memory is plain markdown files in ~/.agentkai/memory/. No database, no embeddings service, no black box: you can read every file, edit them by hand, and version them with git. The agent reads the core files at the start of each run and appends what it learns.",
+  "headings": [
+   {
+    "id": "the-files",
+    "text": "The files"
+   },
+   {
+    "id": "how-it-works",
+    "text": "How it works"
+   },
+   {
+    "id": "conventions-that-keep-it-useful",
+    "text": "Conventions that keep it useful"
+   },
+   {
+    "id": "privacy",
+    "text": "Privacy"
+   }
+  ],
+  "text": "AgentKai's memory is plain markdown files in ~/.agentkai/memory/ . No database, no embeddings service, no black box: you can read every file, edit them by hand, and version them with git. The agent reads the core files at the start of each run and appends what it learns. The files File Purpose SOUL.md The agent's persona — how it talks and behaves USER.md Who you are: name, timezone, what you care about MEMORY.md Durable facts, preferences, commitments YYYY-MM-DD.md Daily log, one file per day people/<name>.md One page per person in your life groups/<name>.md One page per group/community people/ and groups/ each keep an INDEX.md listing everyone. How it works Startup: the agent loads SOUL, USER, and MEMORY into context, so it starts every conversation already knowing you. Learning: when something durable comes up (a preference, a decision, a commitment), it appends to MEMORY.md or the right person's page. Daily logs: append_daily(\"...\") adds a timestamped line to today's file — a running journal of what happened. Search: search(\"query\") does keyword retrieval across all memory files and returns ranked hits with file and line references. Everything is API-accessible too ( agentkai.memory.Memory ), and the dashboard has a memory browser page. Conventions that keep it useful Facts, not essays. One line per fact in MEMORY.md ; detail lives in daily logs. People pages hold what you told the agent about someone and how you relate — never inferred sensitive attributes. Edit freely. The agent re-reads the files each run, so hand-edits take effect immediately. If the agent wrote something wrong, fix the file — don't argue with it. Back it up. It's just markdown: git init in the memory dir or copy it wherever you keep backups. Privacy Memory lives only on your machine ( privacy.md ). It is sent to your model provider as context with your prompts — that's how the model \"knows\" you. With a local model ( --model local ), it never leaves the box."
+ },
+ {
+  "url": "scheduler.html",
+  "title": "Scheduler",
+  "eyebrow": "User guide",
+  "description": "Background jobs that run while you're away: cron-style recurring tasks, one-shot timers, a heartbeat check-in, and nightly \"dreaming\" (memory consolidation). Jobs live in SQLite (~/.agentkai/scheduler.db), so they survive restarts.",
+  "headings": [
+   {
+    "id": "job-types",
+    "text": "Job types"
+   },
+   {
+    "id": "cli",
+    "text": "CLI"
+   },
+   {
+    "id": "safety-unattended-jobs-cant-ask",
+    "text": "Safety: unattended jobs can't ask"
+   },
+   {
+    "id": "heartbeat-dreaming",
+    "text": "Heartbeat & dreaming"
+   },
+   {
+    "id": "how-jobs-execute",
+    "text": "How jobs execute"
+   }
+  ],
+  "text": "Background jobs that run while you're away: cron-style recurring tasks, one-shot timers, a heartbeat check-in, and nightly \"dreaming\" (memory consolidation). Jobs live in SQLite ( ~/.agentkai/scheduler.db ), so they survive restarts. Job types Type Schedule What it runs cron \"m h dom mon dow\" (Vixie cron) an agent prompt or a shell command at @at:2026-10-01T09:00 once, at the given time heartbeat cron a check-in prompt (uses HEARTBEAT.md if you wrote one) dreaming cron (usually nightly) a memory-consolidation prompt over the day's logs Two kinds of work: agent jobs ( --prompt ) run the agent with the given prompt; shell jobs ( --command ) run a command directly (legacy/simple use). CLI # every weekday at 7:00, agent job agentkai scheduler add morning-brief \\ --schedule \"0 7 * * 1-5\" \\ --prompt \"Summarize today's calendar and unread important email.\" \\ --model claude # one-shot: run once at 9:00 tomorrow agentkai scheduler add remind-call --at 2026-10-01T09:00 \\ --prompt \"Remind me to call the bank about the transfer.\" # plain shell command, every 15 minutes agentkai scheduler add disk-check --schedule \"*/15 * * * *\" \\ --command \"df -h / | tail -1\" agentkai scheduler list agentkai scheduler run-once morning-brief # run now, ignore schedule agentkai scheduler run-due # run everything currently due agentkai scheduler remove remind-call Safety: unattended jobs can't ask A scheduled job runs without you watching, so it can never prompt . The unattended permission policy is fixed: low/medium-risk tools → auto-allowed high-risk tools → denied Design your job prompts accordingly: a cron job can read, summarize, and notify, but it cannot exec arbitrary commands or send email without you — those need an attended run. Heartbeat & dreaming Heartbeat wakes the agent on a schedule with a short check-in prompt. Write ~/.agentkai/HEARTBEAT.md to customize what it checks; without it, a built-in checklist is used. Dreaming runs (typically nightly) over the day's event logs and daily memory, consolidating what happened into durable memory. It's how the agent's long-term memory stays fresh without manual curation. How jobs execute Each run gets its own run id and append-only event log ( ~/.agentkai/runs/<run_id>/events.jsonl ), same as interactive runs — inspectable from the dashboard afterwards. Run history is kept in the scheduler database. Note: the scheduler runs jobs when you invoke it ( run-due , typically from your own cron/systemd timer) — there is no always-on daemon in v1. Point your system cron at agentkai scheduler run-due every minute for continuous operation."
+ },
+ {
+  "url": "channels.html",
+  "title": "Channels — the messaging gateway",
+  "eyebrow": "User guide",
+  "description": "agentkai gateway connects chat apps to the agent. One daemon, many channels; every conversation is an isolated session with its own agent run and event log. Chat from your phone, get answers and approvals from wherever you are.",
+  "headings": [
+   {
+    "id": "quick-start",
+    "text": "Quick start"
+   },
+   {
+    "id": "channels",
+    "text": "Channels"
+   },
+   {
+    "id": "config-agentkaichannelsyaml",
+    "text": "Config (~/.agentkai/channels.yaml)"
+   },
+   {
+    "id": "sessions",
+    "text": "Sessions"
+   },
+   {
+    "id": "approvals-in-chat",
+    "text": "Approvals in chat"
+   },
+   {
+    "id": "voice-notes",
+    "text": "Voice notes"
+   },
+   {
+    "id": "widgets",
+    "text": "Widgets"
+   },
+   {
+    "id": "limits",
+    "text": "Limits"
+   }
+  ],
+  "text": "agentkai gateway connects chat apps to the agent. One daemon, many channels; every conversation is an isolated session with its own agent run and event log. Chat from your phone, get answers and approvals from wherever you are. Quick start agentkai gateway Starts with WebChat enabled on http://127.0.0.1:18790/ — open it in a browser. The first run writes an annotated ~/.agentkai/channels.yaml ; edit it to enable channels, then restart. Channels Channel Transport Setup WebChat Built-in WebSocket page, localhost only none — on by default Telegram Bot API, long-polling bot token from @BotFather Discord discord.py bot application + bot token, Message Content intent WhatsApp Experimental bridge via a Node sidecar whatsapp-sidecar , scan QR Details per channel live in src/agentkai/channels/README.md (installed with the package) — including the sidecar setup for WhatsApp. Config ( ~/.agentkai/channels.yaml ) owner: \"telegram:123456\" # who gets approval requests (channel:peer) approval_timeout: 300 # seconds the owner has to APPROVE/DENY model: claude # model alias for chat sessions channels: telegram: {enabled: true, token_env: TELEGRAM_BOT_TOKEN, allowlist: [\"123456\"], owner_peer: \"123456\"} discord: {enabled: false, token_env: DISCORD_BOT_TOKEN, allowlist: [\"789\"], owner_peer: \"789\"} webchat: {enabled: true, port: 18790, allowlist: [\"*\"], owner_peer: \"local\"} whatsapp: {enabled: false, sidecar_url: \"http://localhost:18791\", allowlist: [\"+15551234567\"], owner_peer: \"+15551234567\"} allowlist : peer ids allowed to talk to the agent. Unknown senders are logged and get no reply. \"*\" allows anyone — only sensible for WebChat, which binds 127.0.0.1. owner_peer : the owner's id on that channel. Only the owner can answer approval requests. Tokens come from the environment ( token_env ) or token: in the file. Prefer the environment; never commit the file. Sessions Session key = channel:peer (e.g. telegram:123456 ), or linked:<name> when identity_links maps your ids across channels to one session. History lives in ~/.agentkai/sessions.db ; every message is also appended to the session's event log. While a session's agent is busy, new messages get a \"still working…\" reply instead of queueing. Approvals in chat Medium/high-risk tools ask the owner : Approval needed [a1b2c3d4]: exec(command='rm -rf /tmp/x') [risk=high] Reply `APPROVE a1b2c3d4` or `DENY a1b2c3d4`. No reply within approval_timeout = deny. Non-owners cannot approve. There is deliberately no auto-approve in gateway mode. Voice notes Channels download incoming voice notes and transcribe them before the agent sees the message ( voice.md ). Transcription failures arrive as readable errors, not crashes. Widgets The agent can send interactive UI — option buttons, small forms, info cards, map pins — via the render_widget tool. Each channel renders them natively (Telegram buttons, Discord embeds, …). See the widget protocol in src/agentkai/widgets/PROTOCOL.md . Limits Text-first: image/voice output in chat is not in v1; non-text inbound Telegram/Discord messages are ignored (voice notes excepted). Long replies are split per channel (Telegram 4096, Discord 2000 chars). Gateway runs share ~/.agentkai files (memory, config) with the CLI and dashboard, but not live session state. WhatsApp is experimental : it bridges through the whatsapp-web.js sidecar you run yourself (Node required); WhatsApp may rate-limit automated web clients — use a spare number."
+ },
+ {
+  "url": "skills.html",
+  "title": "Skills",
+  "eyebrow": "User guide",
+  "description": "A skill is a reusable playbook: a SKILL.md file (YAML frontmatter — name, description, version, when-to-use — plus markdown instructions the agent reads) with an optional tools.py exposing get_tools(config). Skills teach the agent how to do a domain well; tools give it the hands.",
+  "headings": [
+   {
+    "id": "bundled-skill-catalog",
+    "text": "Bundled skill catalog"
+   },
+   {
+    "id": "read-the-fine-print",
+    "text": "Read the fine print"
+   },
+   {
+    "id": "writing-a-skill",
+    "text": "Writing a skill"
+   }
+  ],
+  "text": "A skill is a reusable playbook: a SKILL.md file (YAML frontmatter — name, description, version, when-to-use — plus markdown instructions the agent reads) with an optional tools.py exposing get_tools(config) . Skills teach the agent how to do a domain well; tools give it the hands . agentkai skills list # bundled + your installed skills agentkai skills show gmail # read a skill's instructions agentkai skills install ./my-skill agentkai skills install owner/repo --name my-skill agentkai skills remove my-skill Installs go to ~/.agentkai/skills/ . Bundled skills ship with the package and can't be removed. Bundled skill catalog Honest status per skill — what works, what you must configure, and what's deliberately not there. Full setup steps are in each skill's SKILL.md ( agentkai skills show <name> ). Skill What it does Setup gmail Search, read, draft, send Gmail Google OAuth token ( GMAIL_TOKEN or ~/.agentkai/gmail_token.json ); sending is high-risk/gated google_calendar List/create/update/delete events Google OAuth token ( GCAL_TOKEN or ~/.agentkai/gcal_token.json ) github Repos, issues, PRs, Actions runs Personal access token ( GITHUB_TOKEN or ~/.agentkai/github_token.json ) spotify Search, now-playing, play/pause/queue User OAuth token ( SPOTIFY_TOKEN ), needs an active device for playback places Place search + details (hours, phone) via OpenStreetMap none — keyless image_search Keyword image search (Openverse, openly-licensed) none for basic use voice Transcribe audio, speak text faster-whisper ( pip install agentkai[voice] ) or OPENAI_API_KEY ; espeak for offline TTS media Generate/edit images OPENAI_API_KEY (paid) or local Stable Diffusion web UI with --api payments Stripe payment intents STRIPE_SECRET_KEY ; all tools high-risk, every charge needs approval shopping Product search groceries via OpenFoodFacts work out of the box; general shopping needs a provider you plug in travel Live flight tracking (OpenSky) tracking works keyless; flight/hotel search needs a provider you plug in health Summarize exported HealthKit/Health Connect data drop export.xml /CSVs in ~/.agentkai/health/ — file import only, no device sync Read the fine print OAuth tokens expire (usually ~1 hour). Gmail, Calendar, and Spotify skills read the token fresh on every call, so rotate the file/env var — but AgentKai does not do the OAuth dance for you. Long-lived setups need a refresh-token flow you run yourself. Paid APIs cost real money. media (OpenAI images) and any LLM provider bill your key per call; the tools say so and ask first. Pluggable, not magic. shopping and travel search need a provider you register (see their SKILL.md for the 10-line pattern). Only OpenFoodFacts groceries and OpenSky flight tracking are bundled and real. Health is file-import only. Apple/Google offer no server API for personal health data, so you export files yourself. No live sync, no medical advice. Payments never touch card numbers. Stripe intents only; card entry happens in Stripe's hosted UI. Use test keys ( sk_test_… ) until real money is truly intended. Writing a skill my-skill/ SKILL.md # frontmatter: name, description, version, when tools.py # def get_tools(config) -> list[Tool] (optional) --- name: my-skill description: What it does, in one line. version: 0.1.0 when: keywords, that, trigger, this, skill --- # My skill Instructions the agent follows when this skill is active... Keep instructions procedural and concrete — checklists beat essays. Install with agentkai skills install ./my-skill and iterate."
+ },
+ {
+  "url": "voice.html",
+  "title": "Voice",
+  "eyebrow": "User guide",
+  "description": "Speech-to-text and text-to-speech with two honest provider tiers. Nothing is faked: if no provider is available, the tools return a clear error saying exactly what to install or configure.",
+  "headings": [
+   {
+    "id": "providers",
+    "text": "Providers"
+   },
+   {
+    "id": "setup",
+    "text": "Setup"
+   },
+   {
+    "id": "audio-formats",
+    "text": "Audio formats"
+   },
+   {
+    "id": "voice-notes-in-chat",
+    "text": "Voice notes in chat"
+   },
+   {
+    "id": "whats-not-here",
+    "text": "What's not here"
+   }
+  ],
+  "text": "Speech-to-text and text-to-speech with two honest provider tiers. Nothing is faked: if no provider is available, the tools return a clear error saying exactly what to install or configure. Providers Speech-to-text ( transcribe_audio ), auto-selected in order: local — faster-whisper on your machine. Offline, private, audio never leaves the box. Optional dependency: pip install agentkai[voice] (downloads a ~140 MB base model on first use). openai — OpenAI Whisper API. Needs OPENAI_API_KEY ; audio leaves the machine. Text-to-speech ( speak_text ), auto-selected in order: openai — OpenAI TTS ( tts-1 ; voices alloy, echo, fable, onyx, nova, shimmer). Needs OPENAI_API_KEY . Natural-sounding. local — espeak / espeak-ng on Linux, say on macOS. Free and offline, but robotic. There is deliberately no free third-party TTS endpoint: undocumented scraped endpoints break without notice and would be a dishonest dependency. Run provider_matrix() in agentkai.voice (or ask the agent) to see what works on your machine right now. Setup pip install agentkai[voice] # offline STT (faster-whisper) sudo apt install espeak-ng # offline TTS (Linux); macOS ships `say` # sudo apt install ffmpeg # for non-wav audio input export OPENAI_API_KEY=... # API tiers (or ~/.agentkai/openai_token.json) Audio formats mp3, wav, m4a, ogg/oga, opus, flac, webm, aac. Non-wav input is converted to 16 kHz mono wav via ffmpeg when available; otherwise the tool errors clearly. Voice notes in chat Messaging channels download incoming voice-note files and transcribe them before the agent sees the message. Transcription failures come back as readable ERROR: … strings so the gateway replies usefully instead of crashing. What's not here No real-time voice conversation / telephony in v1 — transcription and file-based synthesis only. No speaker identification."
+ },
+ {
+  "url": "media.html",
+  "title": "Media generation",
+  "eyebrow": "User guide",
+  "description": "Image tools for the agent: generate_image, edit_image, and an experimental generate_video. Read the limits first — they're the point.",
+  "headings": [
+   {
+    "id": "honest-limits",
+    "text": "Honest limits"
+   },
+   {
+    "id": "setup",
+    "text": "Setup"
+   },
+   {
+    "id": "editing",
+    "text": "Editing"
+   },
+   {
+    "id": "whats-not-here",
+    "text": "What's not here"
+   }
+  ],
+  "text": "Image tools for the agent: generate_image , edit_image , and an experimental generate_video . Read the limits first — they're the point. Honest limits Image generation is never free-unlimited. Two real providers: OpenAI Images API ( gpt-image-1 ) — a paid API. Every call spends your money on your key. The tools are medium risk, so the permission gate asks before each call. Local Stable Diffusion — the AUTOMATIC1111 web UI API, if you run it yourself. Free after your own hardware. No provider, no image. Without a key or a reachable local server, the tools return a configuration error. Nothing is faked. Video is experimental. AgentKai ships no bundled video provider; generate_video returns an explanatory error until you register one (see VideoProvider in agentkai/media.py ). Setup Option A — OpenAI (paid): Get a key at https://platform.openai.com/api-keys (billing enabled — image calls are charged per image). export OPENAI_API_KEY=... , or create ~/.agentkai/openai_token.json : { \"access_token\": \"<your-key>\" } Option B — local Stable Diffusion (free after hardware): Install the AUTOMATIC1111 Stable Diffusion web UI, launch with --api (default http://127.0.0.1:7860 ). No key needed. Set AGENTKAI_IMAGE_PROVIDER=local_sd to force it. Provider selection order: config[\"media\"][\"image_provider\"] → AGENTKAI_IMAGE_PROVIDER env → auto (OpenAI key present → OpenAI; local SD answering → local SD; else an honest error). Editing edit_image does inpainting/edits (OpenAI provider; mask optional). Generated files land in ~/.agentkai/media/ with unique names. What's not here No bundled video generation. The generate_video entry point exists so a future provider can plug in; today it tells you exactly that. No face/person identification — that's a hard no, not a missing feature."
+ },
+ {
+  "url": "devices.html",
+  "title": "Devices",
+  "eyebrow": "User guide",
+  "description": "Pair your phone or laptop so the agent can reach it: push notifications, SMS via the device's own stack, contacts, and calendar. AgentKai never talks to a phone directly — it talks to the AgentKai companion app over plain HTTPS. The app is the thing that can touch SMS and contacts; the agent just asks it.",
+  "headings": [
+   {
+    "id": "pairing",
+    "text": "Pairing"
+   },
+   {
+    "id": "what-the-agent-can-do-with-a-paired-device",
+    "text": "What the agent can do with a paired device"
+   },
+   {
+    "id": "the-app-contract",
+    "text": "The app contract"
+   },
+   {
+    "id": "security-notes",
+    "text": "Security notes"
+   }
+  ],
+  "text": "Pair your phone or laptop so the agent can reach it: push notifications, SMS via the device's own stack, contacts, and calendar. AgentKai never talks to a phone directly — it talks to the AgentKai companion app over plain HTTPS. The app is the thing that can touch SMS and contacts; the agent just asks it. There is no cloud relay and no fake built-in SMS sender. If no device is paired, the device tools return an honest error saying exactly that. Pairing On your computer: agentkai devices pair → prints a 6-character code (single-use, valid 10 minutes). In the companion app: enter the code. The app calls back to claim the pairing and receives a Bearer <redacted>, which it stores in the device keychain/keystore. AgentKai stores only the token's SHA-256 hash. agentkai devices list # paired devices + capabilities agentkai devices notify \"Hi\" \"Test\" # queue a push (manual test) agentkai devices revoke 1 # token stops working immediately Pairing caveat: the claim endpoint lives on the dashboard, which binds 127.0.0.1 only — your phone can't reach it directly. Complete pairing through a tunnel you control (e.g. ssh -L ), or run your own pairing relay. AgentKai will never ship a cloud relay; your traffic stays yours. What the agent can do with a paired device Via the device_notify , SMS, contacts, and calendar tools: queue a push notification (the app polls and delivers), send an SMS through the device's native SMS stack (never a third-party gateway), look up contacts, and read the device calendar. All of these go through the normal permission gate — sending an SMS asks first. The app contract The companion app implements a small HTTP API under its own api_base : Method Path Purpose POST /agentkai/v1/sms Send SMS ( {\"to\", \"body\"} ) GET /agentkai/v1/contacts Search contacts ( ?q= ) GET /agentkai/v1/calendar Upcoming events ( ?days= ) GET /agentkai/v1/notifications Poll queued notifications POST /agentkai/v1/notifications/ack Acknowledge delivered All calls use Authorization: Bearer <token> . Full contract in src/agentkai/devices/README.md . Security notes Tokens are random 256-bit values, stored hashed. Revocation deletes the hash — the old token stops working immediately. The agent→app channel is only as secure as your network: use HTTPS with a certificate you trust, preferably your own LAN/VPN. No companion app exists yet in this repo — the contract above is what an app must implement. Until one does, the tools honestly report \"no paired device\"."
+ },
+ {
+  "url": "goals.html",
+  "title": "Goals & tracking",
+  "eyebrow": "User guide",
+  "description": "Two related systems for things that outlive one conversation, both in SQLite (~/.agentkai/goals.db):",
+  "headings": [
+   {
+    "id": "cli",
+    "text": "CLI"
+   },
+   {
+    "id": "the-daily-briefing",
+    "text": "The daily briefing"
+   },
+   {
+    "id": "how-the-agent-uses-it",
+    "text": "How the agent uses it"
+   },
+   {
+    "id": "whats-not-here",
+    "text": "What's not here"
+   }
+  ],
+  "text": "Two related systems for things that outlive one conversation, both in SQLite ( ~/.agentkai/goals.db ): Goals — long-lived outcomes you're working toward (\"ship the v1 launch\", \"learn conversational Urdu\"), with subgoals and an activity log of progress and setbacks. Tracked items — concrete commitments with an outcome: reservations, deliveries, reminders. Open when the commitment becomes concrete, close with evidence when it's resolved. The agent has tools for both, so it can manage them on your behalf; you can also drive them from the CLI. CLI agentkai goals create \"Launch v1\" --desc \"Public release of the agent\" agentkai goals create \"Write announcement post\" --parent 1 # subgoal agentkai goals list agentkai goals show 1 agentkai goals log 1 --kind progress --text \"Dashboard QA passed\" agentkai goals close 1 --outcome completed --note \"Shipped 2026-10-01\" agentkai track open \"Dentist appointment Thursday\" --kind reminder agentkai track list agentkai track close 1 --evidence \"Confirmed by SMS\" Goal statuses: active , paused , completed , abandoned . Activity kinds: progress , setback , note . Tracked-item kinds: reservation , delivery , reminder , commitment , other . The daily briefing agentkai goals briefing Prints today's goal-briefing prompt — designed to be wired as a scheduler job (e.g. every morning at 7:00), so the agent reviews your goals, checks what's stale, and nudges you on what needs attention. The prompt is assembled from your active goals and recent activity. How the agent uses it When you mention an enduring aspiration or a concrete commitment, the agent opens a goal or tracked item itself. It logs progress as work happens, and closes tracked items when the outcome is resolved (a delivery received, a reservation confirmed). Closing needs evidence — the agent records what proved the outcome, it doesn't just mark done. What's not here No deadlines/reminders engine beyond what the scheduler provides — pair a goal review with a scheduler heartbeat job for nudges. No collaboration/sharing: goals are yours, on your machine."
+ },
+ {
+  "url": "privacy.html",
+  "title": "Privacy",
+  "eyebrow": "Privacy",
+  "description": "AgentKai runs on your computer. The agent loop, tools, memory files, scheduler database, dashboard, and messaging gateway are all local processes reading and writing ~/.agentkai/. There is no AgentKai cloud, no account, no telemetry, no analytics.",
+  "headings": [
+   {
+    "id": "local-first",
+    "text": "Local-first"
+   },
+   {
+    "id": "what-leaves-the-machine",
+    "text": "What leaves the machine"
+   },
+   {
+    "id": "how-keys-are-handled",
+    "text": "How keys are handled"
+   },
+   {
+    "id": "memory-and-logs",
+    "text": "Memory and logs"
+   },
+   {
+    "id": "boundaries-the-agent-holds",
+    "text": "Boundaries the agent holds"
+   }
+  ],
+  "text": "Local-first AgentKai runs on your computer . The agent loop, tools, memory files, scheduler database, dashboard, and messaging gateway are all local processes reading and writing ~/.agentkai/ . There is no AgentKai cloud, no account, no telemetry, no analytics. What leaves the machine Exactly what you choose to send, and nothing else: Your model provider. Hosted models (Claude, Gemini, GPT, GLM) receive your prompts — including memory context — as API requests. That's the service working as intended. With --model local (Ollama), nothing leaves the box. Skill APIs you configured. Gmail/Calendar/GitHub/Spotify tools call those services' APIs with your tokens, because you asked them to. Nothing else. No crash reports, no usage stats, no update checks. How keys are handled Keys come from environment variables (recommended) or ~/.agentkai/*_token.json files. Environment always wins. Keys are never printed, never logged. agentkai models shows only set / missing . Error messages carry status codes, not key material. Dashboard redaction uses the same rule. Device pairing tokens are stored as SHA-256 hashes, not the tokens themselves. Never commit ~/.agentkai/ to git. Skill setup docs say this per skill; it bears repeating: the directory holds your keys. Memory and logs Memory is markdown on your disk — back it up like any personal files. Event logs ( ~/.agentkai/runs/*/events.jsonl ) record full tool inputs and outputs; they may contain sensitive text you worked with. They're yours, local, and deletable: remove a run's directory and it's gone. Boundaries the agent holds Public actions (sending email, posting, publishing, charging money) always go through the permission gate — the agent asks first. It never invents recipients, never handles raw card numbers, never identifies people from images. Unattended scheduler jobs can't run high-risk tools at all."
+ },
+ {
+  "url": "troubleshooting.html",
+  "title": "Troubleshooting",
+  "eyebrow": "Help",
+  "description": "Fixes for common install, CLI, provider, dashboard, scheduler, and gateway problems.",
+  "headings": [
+   {
+    "id": "install-cli",
+    "text": "Install / CLI"
+   },
+   {
+    "id": "models",
+    "text": "Models"
+   },
+   {
+    "id": "dashboard",
+    "text": "Dashboard"
+   },
+   {
+    "id": "gateway-channels",
+    "text": "Gateway / channels"
+   },
+   {
+    "id": "scheduler",
+    "text": "Scheduler"
+   },
+   {
+    "id": "skills",
+    "text": "Skills"
+   },
+   {
+    "id": "voice-media-browser",
+    "text": "Voice / media / browser"
+   },
+   {
+    "id": "still-stuck",
+    "text": "Still stuck?"
+   }
+  ],
+  "text": "Install / CLI agentkai: command not found — the pip install didn't put scripts on your PATH. Try python -m pip install agentkai (same Python you'll run it with) and check ~/.local/bin is on PATH. Import errors after install — you may have installed into a different Python than the one running agentkai . Use one venv and install inside it. Models run error: ... / auth failures — the model alias resolved, but the provider rejected the call. Check agentkai models : the key shows missing , or the key is wrong/revoked. Keys are never printed, so re-export the env var carefully. --model local fails immediately — Ollama isn't running or the model isn't pulled: ollama pull qwen3:32b (or change the local alias in ~/.agentkai/config.yaml ). This fails fast and cleanly by design — no hanging. Model ignores tool calls — small local models vary in function- calling ability. Try a larger Ollama model or a hosted alias. The capability probe ( probe_capabilities ) can confirm what a model supports. Fallbacks firing constantly — usually a bad key or a provider outage. Fix the primary; fallbacks are a safety net, not a setup. Dashboard Forgetting the token — it's printed once at launch. Restart agentkai dashboard for a fresh token. 401 on every request — pass ?token=… in the URL or the Authorization: Bearer header. EventSource can't set headers, so the UI uses the query param. Port in use — agentkai dashboard --port 9000 . Dashboard won't bind a LAN address — correct. It refuses anything but 127.0.0.1, deliberately. Gateway / channels agentkai gateway exits / channel won't connect — read the log line: it's usually a missing token env var or a malformed ~/.agentkai/channels.yaml . The first run writes an annotated example; diff yours against it. Telegram bot doesn't reply — the bot needs your chat id in the channel's allowlist , and it must have seen at least one message from you (send it anything first). Discord: no message content — enable the Message Content privileged intent in the developer portal, then restart the gateway. WhatsApp sidecar QR won't scan / gets rate-limited — experimental bridge; use a spare number, keep the sidecar on the same machine, and expect WhatsApp to throttle automated web clients. Approval timed out — no reply within approval_timeout (default 300s) counts as deny . Reply APPROVE <id> / DENY <id> faster, or raise the timeout. Scheduler Jobs never run — v1 has no always-on daemon: point your system cron at agentkai scheduler run-due every minute. Check agentkai scheduler list for last_run . Cron job failed silently — inspect the job's run event log under ~/.agentkai/runs/ ; the summary is also in the scheduler database. Job needs a high-risk tool — unattended jobs deny high-risk tools by design. Restructure the prompt to avoid them, or run it attended. Skills Every tool returns a config error — the skill's credential is missing. Run agentkai skills show <name> and follow its Setup section. Most need an OAuth/API token in an env var or ~/.agentkai/*_token.json . OAuth token expired — expected (~1 hour lifetime). Rotate the token file or env var; skills re-read it on every call. AgentKai doesn't do the OAuth dance for you. Spotify playback does nothing — playback targets the active device. Open Spotify on a device and start anything playing first. Voice / media / browser transcribe_audio errors — install the voice extra ( pip install agentkai[voice] ) for offline STT, or set OPENAI_API_KEY . Non-wav input needs ffmpeg . generate_image errors — no provider configured. Set OPENAI_API_KEY (paid) or run local Stable Diffusion with --api . Browser tools raise BrowserUnavailable — pip install playwright then playwright install chromium . Still stuck? Run with the failing command's full output, check ~/.agentkai/runs/<run_id>/events.jsonl for the exact tool error, and open an issue at https://github.com/Bilal-Junaid-Jiwani/agentkai/issues with the log (redact any keys first — they should never appear, but check)."
+ },
+ {
+  "url": "changelog.html",
+  "title": "Changelog",
+  "eyebrow": "Help",
+  "description": "All notable changes to agentkai are documented here. Versioning follows SemVer: MINOR for features, PATCH for fixes.",
+  "headings": [
+   {
+    "id": "020---2026-10-01",
+    "text": "[0.2.0] - 2026-10-01"
+   },
+   {
+    "id": "added",
+    "text": "Added"
+   },
+   {
+    "id": "changed",
+    "text": "Changed"
+   },
+   {
+    "id": "010---2026-09-29",
+    "text": "[0.1.0] - 2026-09-29"
+   }
+  ],
+  "text": "All notable changes to agentkai are documented here. Versioning follows SemVer : MINOR for features, PATCH for fixes. [0.2.0] - 2026-10-01 Added Dashboard scheduler job management (the API.md roadmap item): POST /api/scheduler/jobs — create or update a job (201 on create, 200 on update). Validates the schedule (5-field cron, or @at:<ISO> for one-shot jobs) and requires a prompt or command for cron / at job types, mirroring agentkai scheduler add . DELETE /api/scheduler/jobs/{name} — remove a job (404 if unknown). POST /api/scheduler/jobs/{name}/run — run a job now regardless of schedule (404 if unknown, 400 if disabled); outcome is recorded in the job's run history. The dashboard Scheduler page got a matching UI: an add-job form plus per-row \"Run now\" / \"Delete\" actions. GET /api/scheduler/jobs now also returns prompt , model_alias , job_type and last_run for each job. create_app() accepts an injectable Scheduler (tests back new endpoints with a temp SQLite store). Changed src/agentkai/dashboard/API.md : scheduler job endpoints moved from \"Roadmap\" into the documented endpoint contract; roadmap now lists memory editing and the tool registry. docs/dashboard.md : notes scheduler job management as shipped in v0.2.0. [0.1.0] - 2026-09-29 First public release. ReAct agent loop, multi-provider model layer (Claude/Gemini/GPT/Ollama/ GLM via LiteLLM), safe shell/fs/web tools, MCP client, markdown memory, subagents, SQLite scheduler, messaging gateway (Telegram/Discord/WebChat/WhatsApp), real Chromium browser tool, 12 bundled skills, voice STT/TTS, media generation, devices, goals, widgets, and a token-secured localhost dashboard. 357 tests green (4 skipped); real-Chromium verification 13/13."
+ }
+]

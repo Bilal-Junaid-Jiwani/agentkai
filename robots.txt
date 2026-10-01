@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://bilal-junaid-jiwani.github.io/agentkai/sitemap.xml

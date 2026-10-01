@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>agentkai — Your computer. Your agent.</title>
+  <meta name="description" content="agentkai is an open-source personal AI agent that runs on your own computer. Model-agnostic: bring your own key for Claude, Gemini, GPT, GLM, or run local with Ollama. Local tools, real browser, markdown memory, scheduler, dashboard.">
+  <link rel="icon" href="assets/img/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="assets/css/site.css">
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="#" aria-label="agentkai home">
+      <img src="assets/img/logo.webp" alt="agentkai logo — fluffy yeti" width="30" height="30">
+      agentkai
+    </a>
+    <button class="nav-toggle" id="navToggle" aria-label="Toggle navigation" aria-expanded="false">&#9776;</button>
+    <nav class="nav-links" id="navLinks" aria-label="Primary">
+      <a href="#how">How it works</a>
+      <a href="#features">Features</a>
+      <a href="#cli">CLI</a>
+      <a href="https://bilal-junaid-jiwani.github.io/agentkai/">Docs</a>
+      <a href="https://github.com/Bilal-Junaid-Jiwani/agentkai" rel="noopener">GitHub</a>
+    </nav>
+    <a class="nav-cta" href="#quickstart">pip install agentkai</a>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <p class="eyebrow">Open-source personal AI agent</p>
+      <h1>Your computer.<br>Your <em>agent</em>.</h1>
+      <p class="tagline">One CLI. Your models. Your memory. Your schedule.</p>
+      <div class="install-chip" id="quickstart">
+        <span class="prompt">$</span><code>pip install agentkai</code>
+        <button class="copy-btn" data-copy="pip install agentkai" type="button">Copy</button>
+      </div>
+      <div class="hero-ctas">
+        <a class="btn btn-filled" href="https://bilal-junaid-jiwani.github.io/agentkai/">Read the docs</a>
+        <a class="btn btn-ghost" href="https://github.com/Bilal-Junaid-Jiwani/agentkai" rel="noopener">GitHub</a>
+      </div>
+    </div>
+    <div class="hero-visual">
+      <div class="yeti-card">
+        <img src="assets/img/yeti.gif" alt="agentkai mascot — a fluffy cream yeti, animated idle loop">
+        <p class="caption">the agentkai mascot · animated idle loop</p>
+      </div>
+      <div class="chat-float user">remind me about the dentist tomorrow at 9</div>
+      <div class="chat-float agent">Done — <code>scheduler add dentist --at 2026-10-02T09:00</code></div>
+    </div>
+  </div>
+</section>
+
+<div class="trust">
+  <div class="wrap trust-inner">
+    <span><b>LOCAL-FIRST</b> · runs on your machine</span>
+    <span><b>BRING YOUR OWN KEY</b> · no lock-in</span>
+    <span><b>NO ACCOUNTS</b> · no sign-up</span>
+    <span><b>APACHE-2.0</b> · open source</span>
+  </div>
+</div>
+
+<section class="section" id="how">
+  <div class="wrap">
+    <p class="eyebrow">How it works</p>
+    <h2>Three steps to <em>your</em> agent.</h2>
+    <p class="lede">No cloud account, no subscription, no black box. You bring the model; agentkai brings everything else.</p>
+    <div class="steps">
+      <div class="step">
+        <span class="num">01</span>
+        <h3>Connect a model</h3>
+        <p>One provider layer (LiteLLM) talks to 100+ models. Set a key and pick an alias: <code>claude</code>, <code>gemini</code>, <code>gpt</code>, <code>glm</code> — or <code>local</code> for free offline Ollama.</p>
+      </div>
+      <div class="step">
+        <span class="num">02</span>
+        <h3>Give it tools &amp; memory</h3>
+        <p>Safe shell, real Chromium browser, 12 bundled skills, subagents — and memory as plain markdown files you can read, edit, and version with git.</p>
+      </div>
+      <div class="step">
+        <span class="num">03</span>
+        <h3>Talk from anywhere</h3>
+        <p>Terminal, local web dashboard, or your phone: the messaging gateway bridges Telegram, Discord, WebChat, and WhatsApp to the same agent.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="features" style="padding-top:0">
+  <div class="wrap">
+    <p class="eyebrow">Features</p>
+    <h2>Built like <em>you'd</em> build it.</h2>
+    <p class="lede">Local-first, honest about limits, and every moving part is inspectable.</p>
+
+    <div class="frow">
+      <div class="ftext">
+        <h3>Your models, your keys</h3>
+        <p>agentkai ships no model of its own — it never could lock you in. Aliases resolve per run, per job, or per channel, with fallbacks when a provider hiccups.</p>
+        <ul>
+          <li><code>agentkai models</code> shows aliases and which keys are set</li>
+          <li>100+ models through one LiteLLM provider layer</li>
+          <li>Fully local option: Ollama, no key, no network, no cost</li>
+        </ul>
+      </div>
+      <div class="fvisual">
+        <div class="mock">
+          <div class="mock-bar"><i></i><i></i><i></i><span>terminal</span></div>
+<pre><span class="c"># bring your own key</span>
+export ANTHROPIC_API_KEY=sk-ant-...
+<span class="a">agentkai</span> models
+<span class="g">claude   → anthropic/claude-sonnet-4-5   ✓ key set</span>
+<span class="g">gemini   → gemini/gemini-2.5-flash        ✓ key set</span>
+<span class="g">local    → ollama/qwen3:32b               ✓ local</span>
+<span class="c"># or skip keys entirely</span>
+<span class="a">agentkai</span> run "summarize this folder" --model local</pre>
+        </div>
+      </div>
+    </div>
+
+    <div class="frow flip">
+      <div class="ftext">
+        <h3>It actually remembers</h3>
+        <p>Memory is plain markdown in <code>~/.agentkai/memory/</code> — no database, no embeddings service, no black box. Read every file, edit by hand, commit to git.</p>
+        <ul>
+          <li><code>SOUL.md</code> + <code>USER.md</code> — who the agent is, who you are</li>
+          <li>Daily logs, people pages, long-term MEMORY.md</li>
+          <li>Nightly "dreaming" consolidates the day into durable memory</li>
+        </ul>
+      </div>
+      <div class="fvisual">
+        <div class="mock">
+          <div class="mock-bar"><i></i><i></i><i></i><span>~/.agentkai/memory</span></div>
+<pre>memory/
+<span class="a">├── MEMORY.md</span>        <span class="c"># durable facts</span>
+<span class="a">├── SOUL.md</span>          <span class="c"># agent persona</span>
+<span class="a">├── USER.md</span>          <span class="c"># about you</span>
+<span class="a">├── 2026-10-01.md</span>    <span class="c"># daily log</span>
+<span class="a">└── people/</span>
+<span class="a">    ├── INDEX.md</span>
+    └── muhammad-araf.md
+<span class="c"># git init && git commit — your call</span></pre>
+        </div>
+      </div>
+    </div>
+
+    <div class="frow">
+      <div class="ftext">
+        <h3>Works while you sleep</h3>
+        <p>Cron-style recurring jobs, one-shot timers, a heartbeat check-in, and nightly dreaming — stored in SQLite so they survive restarts.</p>
+        <ul>
+          <li><code>scheduler add</code> / <code>list</code> / <code>run-once</code> / <code>remove</code></li>
+          <li>Dashboard UI: add jobs, run now, delete, inspect history</li>
+          <li>Unattended safety: jobs can never prompt — high-risk tools are denied, not asked</li>
+        </ul>
+      </div>
+      <div class="fvisual">
+        <div class="mock">
+          <div class="mock-bar"><i></i><i></i><i></i><span>scheduler</span></div>
+<pre><span class="c"># every weekday at 7:00</span>
+<span class="a">agentkai</span> scheduler add morning-brief \
+  --schedule "0 7 * * 1-5" \
+  --prompt "Summarize today's calendar and unread email."
+<span class="c"># one-shot</span>
+<span class="a">agentkai</span> scheduler add dentist --at 2026-10-02T09:00 \
+  --prompt "Remind me to leave for the dentist."
+<span class="g">$ agentkai scheduler list</span>
+<span class="g">morning-brief   cron 0 7 * * 1-5   next: tomorrow 07:00</span>
+<span class="g">dentist         at   2026-10-02T09:00</span></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="cli" style="padding-top:0">
+  <div class="wrap">
+    <p class="eyebrow">CLI</p>
+    <h2>One command, <em>everything</em>.</h2>
+    <p class="lede">Eleven commands cover the whole agent. These are real — try them.</p>
+    <div class="cli-tabs" role="tablist" aria-label="CLI examples">
+      <button class="cli-tab" role="tab" aria-selected="true" data-cli="run" type="button">run</button>
+      <button class="cli-tab" role="tab" aria-selected="false" data-cli="chat" type="button">chat</button>
+      <button class="cli-tab" role="tab" aria-selected="false" data-cli="dashboard" type="button">dashboard</button>
+      <button class="cli-tab" role="tab" aria-selected="false" data-cli="scheduler" type="button">scheduler</button>
+      <button class="cli-tab" role="tab" aria-selected="false" data-cli="skills" type="button">skills</button>
+    </div>
+    <div class="cli-body">
+<pre id="cliPre"><span class="c"># run one agent task, streaming</span>
+<span class="a">agentkai</span> run "list the files in my home directory and summarize what this machine is for"
+<span class="c"># → the answer streams as the model thinks; medium/high-risk tools ask first</span>
+<span class="c"># pass -y to auto-approve, only when you trust the task</span></pre>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="skills" style="padding-top:0">
+  <div class="wrap">
+    <p class="eyebrow">Skills</p>
+    <h2>Twelve skills, <em>bundled</em>.</h2>
+    <p class="lede">Reusable playbooks the agent reads: a SKILL.md plus optional tools. Drop in your own the same way.</p>
+    <div class="pills">
+      <span>github</span><span>gmail</span><span>google_calendar</span><span>health</span>
+      <span>image_search</span><span>media</span><span>payments</span><span>places</span>
+      <span>shopping</span><span>spotify</span><span>travel</span><span>voice</span>
+    </div>
+    <p class="skills-note">$ agentkai skills list &nbsp;→&nbsp; the 12 above, ready to use</p>
+  </div>
+</section>
+
+<div class="band">
+  <div class="wrap band-inner">
+    <div class="grow">
+      <p class="eyebrow">Documentation</p>
+      <h2>Everything above, <em>explained</em>.</h2>
+      <p>Sixteen pages: quickstart, models, dashboard, tools, browser, memory, scheduler, channels, skills, voice, media, devices, goals, privacy, troubleshooting, changelog — with search.</p>
+    </div>
+    <a class="btn btn-filled" href="https://bilal-junaid-jiwani.github.io/agentkai/">Read the docs</a>
+  </div>
+</div>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-grid">
+      <div class="foot-brand">
+        <a class="brand" href="#" style="margin-bottom:14px">
+          <img src="assets/img/logo.webp" alt="agentkai logo" width="28" height="28">
+          agentkai
+        </a>
+        <p>An open-source personal AI agent that runs on your own computer. Apache-2.0.</p>
+      </div>
+      <div class="foot-col">
+        <h4>Docs</h4>
+        <a href="https://bilal-junaid-jiwani.github.io/agentkai/">Quickstart</a>
+        <a href="https://bilal-junaid-jiwani.github.io/agentkai/models.html">Models</a>
+        <a href="https://bilal-junaid-jiwani.github.io/agentkai/scheduler.html">Scheduler</a>
+        <a href="https://bilal-junaid-jiwani.github.io/agentkai/changelog.html">Changelog</a>
+      </div>
+      <div class="foot-col">
+        <h4>Project</h4>
+        <a href="https://github.com/Bilal-Junaid-Jiwani/agentkai" rel="noopener">GitHub</a>
+        <a href="https://pypi.org/project/agentkai/" rel="noopener">PyPI</a>
+        <a href="https://github.com/Bilal-Junaid-Jiwani/agentkai/issues" rel="noopener">Issues</a>
+      </div>
+    </div>
+    <div class="foot-base">
+      <span>agentkai — your own computer, your own agent.</span>
+      <span>Apache-2.0 · built in the open</span>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/js/site.js" defer></script>
+</body>
+</html>
