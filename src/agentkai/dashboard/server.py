@@ -36,10 +36,10 @@ from ..agent import Agent
 from ..memory import Memory
 from ..permissions import Action, PermissionGate
 from ..providers import ALIASES, ProviderConfig, resolve_model
-from ..scheduler import Scheduler
+from ..scheduler import Job, Scheduler, parse_at, parse_cron
 
 STATIC_DIR = Path(__file__).parent / "static"
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 DEFAULT_MODEL_ALIAS = "claude"
 APPROVAL_TIMEOUT_S = 600.0  # how long a chat approval card waits for a click
@@ -150,6 +150,59 @@ class ChatRequest(BaseModel):
 class ApproveRequest(BaseModel):
     action_id: str
     approved: bool
+
+
+_JOB_TYPES = ("cron", "at", "heartbeat", "dreaming")
+
+
+class JobUpsertRequest(BaseModel):
+    name: str
+    schedule: str  # 5-field cron, or "@at:<ISO datetime>" for one-shots
+    command: str = ""  # legacy shell job (mutually exclusive-ish with prompt)
+    prompt: str = ""  # agent prompt for new-style jobs
+    model_alias: str = "claude"
+    job_type: str = "cron"
+    enabled: bool = True
+
+
+def _validate_job_payload(body: JobUpsertRequest) -> Job:
+    """Turn a validated request model into a Job, raising HTTPException(400)
+    on anything the scheduler cannot run. Mirrors the rules of
+    ``agentkai scheduler add`` so the dashboard and the CLI accept the
+    same jobs."""
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(400, "job name is required")
+    if len(name) > 128:
+        raise HTTPException(400, "job name too long (max 128 chars)")
+    if body.job_type not in _JOB_TYPES:
+        raise HTTPException(
+            400, f"unknown job type {body.job_type!r}; "
+                 f"expected one of {', '.join(_JOB_TYPES)}")
+    schedule = (body.schedule or "").strip()
+    try:
+        if body.job_type == "at":
+            parse_at(schedule)
+        else:
+            parse_cron(schedule)
+    except ValueError as exc:
+        raise HTTPException(400, f"bad schedule: {exc}") from exc
+    prompt = (body.prompt or "").strip()
+    command = (body.command or "").strip()
+    if not prompt and not command and body.job_type in ("cron", "at"):
+        raise HTTPException(
+            400, "cron/at jobs need a 'prompt' (agent job) or a "
+                 "'command' (shell job)")
+    return Job(name=name, schedule=schedule, command=command, prompt=prompt,
+               model_alias=(body.model_alias or "claude").strip() or "claude",
+               job_type=body.job_type, enabled=bool(body.enabled))
+
+
+def _job_json(j) -> dict:
+    return {"name": j.name, "schedule": j.schedule, "command": j.command,
+            "prompt": j.prompt, "model_alias": j.model_alias,
+            "job_type": j.job_type, "enabled": j.enabled,
+            "last_run": j.last_run}
 
 
 # --------------------------------------------------------------------------
@@ -305,19 +358,24 @@ async def _run_agent(app: FastAPI, store: RunStore, run_id: str,
 
 def create_app(token: str | None = None,
                agent_factory: Callable[[str, PermissionGate], Agent]
-               | None = None) -> FastAPI:
+               | None = None,
+               scheduler: Scheduler | None = None) -> FastAPI:
     """Build the dashboard app. A random token is generated per launch;
     pass an explicit token only in tests.
 
     ``agent_factory(model_alias, gate) -> Agent`` builds the agent for chat
     runs; the default builds the real agent loop. Tests inject a fake
     (which also skips the provider-key precheck).
+
+    ``scheduler`` may be a pre-built :class:`~agentkai.scheduler.Scheduler`
+    (tests inject one backed by a temp SQLite file); the default is the
+    real user store at ``~/.agentkai/scheduler.db``.
     """
     token = token or secrets.token_urlsafe(32)
     store = RunStore()
     started_at = time.time()
     memory = Memory()
-    scheduler = Scheduler()
+    scheduler = scheduler or Scheduler()
 
     app = FastAPI(title="agentkai dashboard", docs_url=None, redoc_url=None,
                   openapi_url=None)
@@ -450,14 +508,43 @@ def create_app(token: str | None = None,
             raise HTTPException(404, "no such memory file")
         return {"name": name, "content": content}
 
-    # ---- scheduler (real Scheduler class, read-only for now) ----
+    # ---- scheduler: real Scheduler class, full job management ----
     @app.get("/api/scheduler/jobs")
     async def scheduler_jobs():
         jobs = scheduler.list()
         return {"db": str(scheduler.db_path),
-                "jobs": [{"name": j.name, "schedule": j.schedule,
-                          "command": j.command, "enabled": j.enabled}
-                         for j in jobs]}
+                "jobs": [_job_json(j) for j in jobs]}
+
+    @app.post("/api/scheduler/jobs", status_code=201)
+    async def scheduler_job_create(body: JobUpsertRequest):
+        job = _validate_job_payload(body)
+        created = scheduler.get(job.name) is None
+        scheduler.add(job)
+        return JSONResponse({"ok": True, "name": job.name,
+                             "created": created, "job": _job_json(job)},
+                            status_code=201 if created else 200)
+
+    @app.delete("/api/scheduler/jobs/{name}")
+    async def scheduler_job_delete(name: str):
+        if not scheduler.remove(name):
+            raise HTTPException(404, f"no job named {name!r}")
+        return {"ok": True, "name": name}
+
+    @app.post("/api/scheduler/jobs/{name}/run")
+    async def scheduler_job_run(name: str):
+        job = scheduler.get(name)
+        if job is None:
+            raise HTTPException(404, f"no job named {name!r}")
+        if not job.enabled:
+            raise HTTPException(400, f"job {name!r} is disabled; "
+                                     "re-enable it before running")
+        # Same pattern as chat runs: blocking agent work leaves the event
+        # loop via to_thread. run_job() records the outcome in job_runs.
+        result = await asyncio.to_thread(scheduler.run_job, name)
+        return {"name": name, "status": result["status"],
+                "summary": result.get("summary", ""),
+                "started_ts": result.get("started_ts", ""),
+                "finished_ts": result.get("finished_ts", "")}
 
     app.state.dashboard_token = token
     app.state.store = store

@@ -74,11 +74,12 @@ to configure it — nothing is faked.
 | GET | `/api/events` | `text/event-stream`: live activity feed across all runs (no replay), `: ping` keepalives |
 | GET | `/api/memory` | `{root, files: [{name, exists}]}` — SOUL/USER/MEMORY/AGENTS/IDENTITY/TOOLS.md + daily logs (wired to the real `Memory` class) |
 | GET | `/api/memory/{name}` | `{name, content}` — 400 on path traversal, 404 if missing |
-| GET | `/api/scheduler/jobs` | `{db, jobs: [{name, schedule, command, enabled}]}` — wired to the real `Scheduler` SQLite store |
+| GET | `/api/scheduler/jobs` | `{db, jobs: [{name, schedule, command, prompt, model_alias, job_type, enabled, last_run}]}` — wired to the real `Scheduler` SQLite store |
+| POST | `/api/scheduler/jobs` | body `{name, schedule, command?, prompt?, model_alias?, job_type?, enabled?}` → `{ok, name, created, job}`. Creates or updates a job; `schedule` is a 5-field cron or `@at:<ISO>` for one-shots (type `at`). `command` or `prompt` required for `cron`/`at` types. 400 on invalid schedule/type/payload; 201 on create, 200 on update |
+| DELETE | `/api/scheduler/jobs/{name}` | → `{ok, name}`. 404 if unknown |
+| POST | `/api/scheduler/jobs/{name}/run` | Runs the job now regardless of schedule → `{name, status, summary, started_ts, finished_ts}`. 404 if unknown, 400 if the job is disabled |
 
 ## Roadmap (contract additions, not changes)
 
-- `POST /api/scheduler/jobs`, `DELETE /api/scheduler/jobs/{name}`,
-  `POST /api/scheduler/jobs/{name}/run` — job CRUD + manual trigger
 - `PUT /api/memory/{name}` — edit memory files (with backup)
 - `GET /api/tools` — tool registry listing

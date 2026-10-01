@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: agentkai
-Version: 0.1.0
+Version: 0.2.0
 Summary: Open-source personal AI agent — model-agnostic, with tools, memory, scheduler and a local dashboard
 License: Apache-2.0
 Requires-Python: >=3.10
@@ -119,8 +119,9 @@ all docs: [`docs/index.md`](docs/index.md)
 
 ## Status
 
-v0.1.0 — core flows (agent runs, tools, memory, scheduler, dashboard,
-channels) are implemented and tested. Items marked **experimental** in
+v0.2.0 — core flows (agent runs, tools, memory, scheduler, dashboard,
+channels) are implemented and tested; the dashboard now manages
+scheduled jobs (create, delete, run now). Items marked **experimental** in
 the docs (WhatsApp bridge, video generation) are real code with real
 limits. See [`docs/troubleshooting.md`](docs/troubleshooting.md) for
 known gaps.

@@ -44,7 +44,7 @@ from .tools import Tool
 
 DEFAULT_CONFIG = Path("~/.agentkai/mcp.json").expanduser()
 DEFAULT_TIMEOUT = 30
-CLIENT_INFO = {"name": "agentkai", "version": "0.1.0"}
+CLIENT_INFO = {"name": "agentkai", "version": "0.2.0"}
 PROTOCOL_VERSION = "2024-11-05"
 
 

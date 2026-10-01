@@ -23,7 +23,7 @@ Start here:
 - [privacy.md](privacy.md) — where your data lives, how keys are handled
 - [troubleshooting.md](troubleshooting.md) — common problems and fixes
 
-Honest scope note: this is early-stage software (v0.1.0). Core flows —
+Honest scope note: this is early-stage software (v0.2.0). Core flows —
 agent runs, tools, memory, scheduler, dashboard, channels — are implemented
 and tested. Areas marked **experimental** in the docs below are real code
 with real limits; they are labeled, not hidden. The

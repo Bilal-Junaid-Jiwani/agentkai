@@ -246,3 +246,164 @@ def test_no_external_urls_in_static():
                 if needle in text:
                     offenders.append(f"{p.name}: {needle}")
     assert not offenders, offenders
+
+
+# ---------------- scheduler job management (v0.2.0) ----------------
+
+from types import SimpleNamespace
+
+from agentkai.scheduler import Job, Scheduler
+
+
+class _JobFakeAgent:
+    """Fake agent for Scheduler.run_job: instant, scripted, records prompts."""
+
+    def __init__(self):
+        self.prompts: list[str] = []
+
+    def run(self, prompt):
+        self.prompts.append(prompt)
+        return SimpleNamespace(text="job ran fine", status="done",
+                               error="", run_id="fake-job-run")
+
+
+def _sched_client(tmp_path):
+    sched = Scheduler(db=tmp_path / "sched-test.db",
+                      agent_factory=lambda alias: _JobFakeAgent())
+    app = create_app(TOKEN, agent_factory=_fake_factory, scheduler=sched)
+    transport = httpx.ASGITransport(app=app)
+    return sched, httpx.AsyncClient(transport=transport,
+                                   base_url="http://127.0.0.1")
+
+
+_PAYLOAD = {"name": "morning-brief", "schedule": "*/15 * * * *",
+            "prompt": "summarize overnight activity"}
+
+
+@pytest.mark.asyncio
+async def test_scheduler_create_job(tmp_path):
+    sched, c = _sched_client(tmp_path)
+    async with c:
+        r = await c.post(f"/api/scheduler/jobs?token={TOKEN}",
+                         json=_PAYLOAD)
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["ok"] and body["created"] is True
+    assert body["job"]["name"] == "morning-brief"
+    assert sched.get("morning-brief").prompt == "summarize overnight activity"
+    sched.close()
+
+
+@pytest.mark.asyncio
+async def test_scheduler_create_job_shows_in_list(tmp_path):
+    sched, c = _sched_client(tmp_path)
+    async with c:
+        await c.post(f"/api/scheduler/jobs?token={TOKEN}", json=_PAYLOAD)
+        body = (await c.get(f"/api/scheduler/jobs?token={TOKEN}")).json()
+    names = [j["name"] for j in body["jobs"]]
+    assert "morning-brief" in names
+    sched.close()
+
+
+@pytest.mark.asyncio
+async def test_scheduler_create_upserts_existing(tmp_path):
+    sched, c = _sched_client(tmp_path)
+    async with c:
+        await c.post(f"/api/scheduler/jobs?token={TOKEN}", json=_PAYLOAD)
+        payload = dict(_PAYLOAD, schedule="0 9 * * *")
+        r = await c.post(f"/api/scheduler/jobs?token={TOKEN}", json=payload)
+    assert r.status_code == 200, r.text
+    assert r.json()["created"] is False
+    assert sched.get("morning-brief").schedule == "0 9 * * *"
+    assert len(sched.list()) == 1
+    sched.close()
+
+
+@pytest.mark.asyncio
+async def test_scheduler_create_validates(tmp_path):
+    sched, c = _sched_client(tmp_path)
+    bad = [
+        dict(_PAYLOAD, schedule="not a cron"),        # bad cron
+        dict(_PAYLOAD, schedule="0 9 * *"),            # only 4 fields
+        dict(_PAYLOAD, prompt="", command=""),         # nothing to run
+        dict(_PAYLOAD, name="   "),                    # empty name
+        dict(_PAYLOAD, job_type="weekly"),             # unknown type
+        dict(_PAYLOAD, job_type="at", schedule="0 9 * * *"),  # at needs @at:
+    ]
+    async with c:
+        for payload in bad:
+            r = await c.post(f"/api/scheduler/jobs?token={TOKEN}",
+                             json=payload)
+            assert r.status_code == 400, (payload, r.text)
+    assert sched.list() == []
+    sched.close()
+
+
+@pytest.mark.asyncio
+async def test_scheduler_create_one_shot(tmp_path):
+    sched, c = _sched_client(tmp_path)
+    payload = dict(_PAYLOAD, name="once", job_type="at",
+                   schedule="@at:2026-10-05T09:00")
+    async with c:
+        r = await c.post(f"/api/scheduler/jobs?token={TOKEN}", json=payload)
+    assert r.status_code == 201, r.text
+    assert sched.get("once").job_type == "at"
+    sched.close()
+
+
+@pytest.mark.asyncio
+async def test_scheduler_delete(tmp_path):
+    sched, c = _sched_client(tmp_path)
+    async with c:
+        await c.post(f"/api/scheduler/jobs?token={TOKEN}", json=_PAYLOAD)
+        r = await c.delete(
+            f"/api/scheduler/jobs/morning-brief?token={TOKEN}")
+        assert r.status_code == 200, r.text
+        assert r.json()["ok"] is True
+        r2 = await c.delete(
+            f"/api/scheduler/jobs/morning-brief?token={TOKEN}")
+        assert r2.status_code == 404
+    assert sched.get("morning-brief") is None
+    sched.close()
+
+
+@pytest.mark.asyncio
+async def test_scheduler_run_job_now(tmp_path):
+    sched, c = _sched_client(tmp_path)
+    async with c:
+        await c.post(f"/api/scheduler/jobs?token={TOKEN}", json=_PAYLOAD)
+        r = await c.post(
+            f"/api/scheduler/jobs/morning-brief/run?token={TOKEN}")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "done"
+    assert "job ran fine" in body["summary"]
+    runs = sched.job_runs("morning-brief")
+    assert len(runs) == 1 and runs[0]["status"] == "done"
+    assert sched.get("morning-brief").last_run
+    sched.close()
+
+
+@pytest.mark.asyncio
+async def test_scheduler_run_unknown_and_disabled(tmp_path):
+    sched, c = _sched_client(tmp_path)
+    sched.add(Job(name="off", schedule="* * * * *", prompt="x",
+                  enabled=False))
+    async with c:
+        r = await c.post(f"/api/scheduler/jobs/nope/run?token={TOKEN}")
+        assert r.status_code == 404
+        r = await c.post(f"/api/scheduler/jobs/off/run?token={TOKEN}")
+        assert r.status_code == 400
+    sched.close()
+
+
+@pytest.mark.asyncio
+async def test_scheduler_endpoints_require_token(tmp_path):
+    _sched, c = _sched_client(tmp_path)
+    async with c:
+        r = await c.post("/api/scheduler/jobs", json=_PAYLOAD)
+        assert r.status_code == 401
+        r = await c.delete("/api/scheduler/jobs/x")
+        assert r.status_code == 401
+        r = await c.post("/api/scheduler/jobs/x/run")
+        assert r.status_code == 401

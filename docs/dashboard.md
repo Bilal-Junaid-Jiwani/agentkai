@@ -47,4 +47,5 @@ real stores.
 The full endpoint contract is documented in
 `src/agentkai/dashboard/API.md` (installed with the package): auth,
 event shapes, and every `/api/*` endpoint, plus the planned additions
-(job CRUD, memory editing, approval cards).
+(memory editing, approval cards). Scheduler job management (create,
+delete, manual run) shipped in v0.2.0 and is documented there too.

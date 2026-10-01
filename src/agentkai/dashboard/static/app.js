@@ -389,24 +389,101 @@
     view.innerHTML = '<div id="sched"><div class="empty"><div class="big">Loading jobs…</div></div></div>';
     api("/api/scheduler/jobs").then(function (d) {
       var el = document.getElementById("sched");
-      if (!d.jobs.length) {
-        el.innerHTML = '<div class="empty"><div class="big">No scheduled jobs</div>' +
-          '<div>Jobs created via the scheduler API will appear here.</div>' +
-          '<div class="muted mono" style="margin-top:8px">db: ' + esc(d.db) + "</div></div>";
-        return;
-      }
-      el.innerHTML = '<div class="card"><table class="tbl"><thead><tr>' +
-        "<th>Job</th><th>Schedule</th><th>Command</th><th>Enabled</th>" +
-        "</tr></thead><tbody>" + d.jobs.map(function (j) {
-          return "<tr><td><strong>" + esc(j.name) + "</strong></td>" +
-            "<td class='mono'>" + esc(j.schedule) + "</td>" +
-            "<td class='mono muted'>" + esc(j.command.slice(0, 90)) + "</td>" +
-            "<td>" + (j.enabled
-              ? '<span class="status-pill done">on</span>'
-              : '<span class="status-pill error">off</span>') + "</td></tr>";
-        }).join("") + "</tbody></table></div>" +
+      var rows = d.jobs.map(function (j) {
+        return "<tr><td><strong>" + esc(j.name) + "</strong></td>" +
+          "<td class='mono'>" + esc(j.schedule) + "</td>" +
+          "<td class='mono'>" + esc(j.job_type) + "</td>" +
+          "<td class='mono muted'>" + esc((j.prompt || j.command || "").slice(0, 90)) + "</td>" +
+          "<td>" + (j.enabled
+            ? '<span class="status-pill done">on</span>'
+            : '<span class="status-pill error">off</span>') + "</td>" +
+          "<td class='mono muted'>" + (j.last_run ? esc(j.last_run.slice(0, 16).replace("T", " ")) : "—") + "</td>" +
+          "<td><button class='btn-mini' data-run='" + esc(j.name) + "'>Run now</button> " +
+          "<button class='btn-mini danger' data-del='" + esc(j.name) + "'>Delete</button></td></tr>";
+      }).join("");
+      el.innerHTML =
+        '<div class="card"><h3>Add job</h3>' +
+        '<form id="job-form" class="form-grid">' +
+        '<label>Name<input id="jf-name" required maxlength="128" placeholder="morning-brief"></label>' +
+        '<label>Schedule<input id="jf-schedule" required placeholder="*/15 * * * *  or  @at:2026-10-05T09:00"></label>' +
+        '<label>Type<select id="jf-type"><option value="cron">cron</option><option value="at">at (one-shot)</option>' +
+        '<option value="heartbeat">heartbeat</option><option value="dreaming">dreaming</option></select></label>' +
+        '<label class="wide">Prompt (agent job)<input id="jf-prompt" placeholder="what the agent should do"></label>' +
+        '<label class="wide">…or shell command (legacy)<input id="jf-command" placeholder="echo hi"></label>' +
+        '<div class="wide"><button type="submit" class="btn-mini">Save job</button> ' +
+        '<span id="jf-err" class="err"></span></div></form></div>' +
+        '<div class="card"><table class="tbl"><thead><tr>' +
+        "<th>Job</th><th>Schedule</th><th>Type</th><th>Prompt / command</th><th>Enabled</th><th>Last run</th><th>Actions</th>" +
+        "</tr></thead><tbody>" + (rows || '<tr><td colspan="7" class="muted">No scheduled jobs yet.</td></tr>') +
+        "</tbody></table></div>" +
         '<div class="muted mono">db: ' + esc(d.db) + "</div>";
+      bindSchedulerForm();
+      bindSchedulerActions();
     }).catch(function (e) { view.innerHTML = errHtml(e); });
+  }
+
+  function schedulerPayload() {
+    return {
+      name: document.getElementById("jf-name").value.trim(),
+      schedule: document.getElementById("jf-schedule").value.trim(),
+      job_type: document.getElementById("jf-type").value,
+      prompt: document.getElementById("jf-prompt").value,
+      command: document.getElementById("jf-command").value
+    };
+  }
+
+  function bindSchedulerForm() {
+    var form = document.getElementById("job-form");
+    if (!form) return;
+    form.addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var err = document.getElementById("jf-err");
+      err.textContent = "";
+      fetch(q("/api/scheduler/jobs"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(schedulerPayload())
+      }).then(function (r) {
+        if (!r.ok) return r.json().then(function (d) {
+          throw new Error(d.detail || ("HTTP " + r.status));
+        });
+        return r.json();
+      }).then(function () { renderScheduler(); })
+        .catch(function (e) { err.textContent = e.message; });
+    });
+  }
+
+  function bindSchedulerActions() {
+    var el = document.getElementById("sched");
+    el.addEventListener("click", function (ev) {
+      var t = ev.target;
+      if (t.dataset.run) {
+        t.disabled = true;
+        t.textContent = "Running…";
+        fetch(q("/api/scheduler/jobs/" + encodeURIComponent(t.dataset.run) + "/run"),
+          { method: "POST" })
+          .then(function (r) {
+            if (!r.ok) return r.json().then(function (d) {
+              throw new Error(d.detail || ("HTTP " + r.status));
+            });
+            return r.json();
+          })
+          .then(function (d) { renderScheduler(); })
+          .catch(function (e) {
+            t.disabled = false; t.textContent = "Run now";
+            alert(e.message);
+          });
+      } else if (t.dataset.del) {
+        if (!confirm("Delete job '" + t.dataset.del + "'?")) return;
+        fetch(q("/api/scheduler/jobs/" + encodeURIComponent(t.dataset.del)),
+          { method: "DELETE" })
+          .then(function (r) {
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            renderScheduler();
+          })
+          .catch(function (e) { alert(e.message); });
+      }
+    });
   }
 
   /* ---------------- settings ---------------- */
@@ -430,6 +507,7 @@
       "<li><code>GET /api/events?run_id=…</code> — SSE stream of run events (live activity feed without run_id)</li>" +
       "<li><code>GET /api/memory</code> · <code>GET /api/memory/{name}</code> — browse memory files</li>" +
       "<li><code>GET /api/scheduler/jobs</code> — cron jobs from the SQLite store</li>" +
+      "<li><code>POST /api/scheduler/jobs</code> · <code>DELETE /api/scheduler/jobs/{name}</code> · <code>POST /api/scheduler/jobs/{name}/run</code> — job management + manual trigger</li>" +
       "</ul><p class='muted'>Full contract: <code>src/agentkai/dashboard/API.md</code></p></div></div>";
     api("/api/status").then(function (s) {
       document.getElementById("set-kv").innerHTML =
