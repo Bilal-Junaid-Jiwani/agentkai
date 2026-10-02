@@ -17,6 +17,8 @@ Gemini, GPT, a local Ollama model, GLM, or anything LiteLLM speaks —
 and the agent keeps the same tools, memory, scheduler, and dashboard.
 Everything runs locally first; your data stays on your machine.
 
+![agentkai dashboard — chat with the agent](https://raw.githubusercontent.com/Bilal-Junaid-Jiwani/agentkai/main/docs/assets/img/dashboard-chat.png)
+
 ## 60-second quickstart
 
 ```bash
@@ -29,6 +31,8 @@ agentkai dashboard             # local UI at http://127.0.0.1:8931/
 
 No key? Install [Ollama](https://ollama.com), `ollama pull qwen3:32b`,
 then `agentkai run "hello" --model local` — fully offline.
+
+> ⭐ If agentkai helped you, a star means a lot — it helps other developers find the project.
 
 ## Why agentkai
 
