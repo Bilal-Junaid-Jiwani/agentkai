@@ -18,6 +18,7 @@ import pytest
 from agentkai.agent import Agent
 from agentkai.dashboard import DASHBOARD_PORT, run
 from agentkai.dashboard.server import create_app
+from agentkai.memory import Memory
 from agentkai.permissions import PermissionGate
 from agentkai.providers import LLMMessage
 from agentkai.tools import Registry, Tool
@@ -54,8 +55,8 @@ def _fake_factory(model_alias, gate):
                  events_root=tempfile.mkdtemp(prefix="ak-dash-test-"))
 
 
-def client(**kw):
-    app = create_app(TOKEN, agent_factory=_fake_factory)
+def client(memory=None, **kw):
+    app = create_app(TOKEN, agent_factory=_fake_factory, memory=memory)
     transport = httpx.ASGITransport(app=app)
     return httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1",
                              **kw)
@@ -225,6 +226,61 @@ async def test_memory_endpoints():
         assert (await c.get(f"/api/memory/../x?token={TOKEN}")).status_code in (400, 404)
         r = await c.get(f"/api/memory/NOPE.md?token={TOKEN}")
         assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_memory_write_endpoint(tmp_path):
+    mem = Memory(root=tmp_path / "memory")
+    url = "/api/memory/DASH-TEST.md?token=" + TOKEN
+    async with client(memory=mem) as c:
+        # create: 201, no backup
+        r = await c.put(url, json={"content": "# hello\n"})
+        assert r.status_code == 201
+        body = r.json()
+        assert body["created"] is True and body["backup"] is None
+        assert body["bytes"] == 8
+        assert mem.read("DASH-TEST.md") == "# hello\n"
+        # update: 200, previous version kept as .bak
+        r = await c.put(url, json={"content": "# hello v2\n"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["created"] is False
+        assert body["backup"] == "DASH-TEST.md.bak"
+        assert mem.read("DASH-TEST.md.bak") == "# hello\n"
+        # round-trip through the GET reader
+        r = await c.get(url)
+        assert r.json()["content"] == "# hello v2\n"
+
+
+@pytest.mark.asyncio
+async def test_memory_write_rejects_bad_input(tmp_path):
+    mem = Memory(root=tmp_path / "memory")
+    async with client(memory=mem) as c:
+        r = await c.put("/api/memory/../evil?token=" + TOKEN,
+                        json={"content": "x"})
+        assert r.status_code in (400, 404)
+        r = await c.put("/api/memory/a%5Cb?token=" + TOKEN,
+                        json={"content": "x"})
+        assert r.status_code == 400
+        r = await c.put("/api/memory/BIG.md?token=" + TOKEN,
+                        json={"content": "x" * 1_000_001})
+        assert r.status_code == 400
+        # oversized write must not have touched the store
+        assert not (tmp_path / "memory" / "BIG.md").exists()
+
+
+@pytest.mark.asyncio
+async def test_tools_endpoint():
+    async with client() as c:
+        body = (await c.get(f"/api/tools?token={TOKEN}")).json()
+    tools = body["tools"]
+    assert isinstance(tools, list) and len(tools) > 0
+    names = {t["name"] for t in tools}
+    assert {"exec", "read_file", "write_file", "fetch_url"} <= names
+    for t in tools:
+        assert set(t) == {"name", "description", "risk"}
+        assert t["risk"] in ("low", "medium", "high")
+        assert t["description"] and isinstance(t["description"], str)
 
 
 @pytest.mark.asyncio

@@ -85,7 +85,8 @@ Run `agentkai <command> --help` for flags on any command.
 ## Web dashboard
 
 Prefer a UI? `agentkai dashboard` launches a local web app: chat with
-the agent, watch runs stream in with tool calls inline, browse memory,
+the agent, watch runs stream in with tool calls inline, browse and edit
+memory, inspect the tool registry,
 and manage scheduled jobs — create, delete, or trigger a run now.
 
 ```bash
@@ -121,7 +122,7 @@ offline. Same agent, same tools underneath.
 [Privacy](https://github.com/Bilal-Junaid-Jiwani/agentkai/blob/main/docs/privacy.md) ·
 [Troubleshooting](https://github.com/Bilal-Junaid-Jiwani/agentkai/blob/main/docs/troubleshooting.md)
 
-Honest scope note: this is early-stage software (v0.2.0). Core flows —
+Honest scope note: this is early-stage software (v0.3.0). Core flows —
 agent runs, tools, memory, scheduler, dashboard, channels — are
 implemented and tested. Areas marked **experimental** in the docs are
 real code with real limits; they are labeled, not hidden.

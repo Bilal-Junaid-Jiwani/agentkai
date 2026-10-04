@@ -3,6 +3,34 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.3.0] - 2026-10-04
+
+### Added
+- `PUT /api/memory/{name}` (closes the API.md roadmap item): edit any
+  memory file from the dashboard or API — body `{content}`, same
+  root-level name rules as the GET (400 on path traversal), 1 MiB cap.
+  The previous version is kept as a `<name>.bak` sidecar via atomic
+  rename; response is `{name, created, backup, bytes}` (201 on create,
+  200 on update). The dashboard Memory page gained an Edit/Save UI that
+  surfaces the backup filename.
+- `GET /api/tools` (closes the API.md roadmap item): lists the built-in
+  tool registry as `{tools: [{name, description, risk}]}` via a new
+  `Registry.describe()` accessor (MCP-attached remote tools are per-run
+  and intentionally not listed). The dashboard has a matching Tools page
+  with per-tool risk pills.
+- `Memory.replace(name, text) -> (created, backup)`: atomic replace with
+  `.bak` sidecar; backs the PUT endpoint.
+- `create_app()` accepts an injectable `Memory` (tests back new
+  endpoints with a temp memory root).
+
+### Changed
+- `src/agentkai/dashboard/API.md`: memory editing and the tool registry
+  moved from "Roadmap" into the documented endpoint contract; roadmap
+  is empty.
+- `docs/dashboard.md`: corrected the stale "stubbed run simulation"
+  note (the chat page drives the real agent loop) and documented the
+  new pages.
+
 ## [0.2.0] - 2026-10-01
 
 ### Added

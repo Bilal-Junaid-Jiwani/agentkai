@@ -26,7 +26,9 @@ agentkai dashboard --port 9000
   SSE, with tool calls shown inline as they happen.
 - **Runs** — every run's history with a full event timeline
   (messages, tool calls, results, approvals). Replay any finished run.
-- **Memory** — browse SOUL/USER/MEMORY.md and daily logs.
+- **Memory** — browse SOUL/USER/MEMORY.md and daily logs, and edit any
+  file in place (the previous version is kept as a `<name>.bak` sidecar).
+- **Tools** — every built-in tool the agent can call, with its risk level.
 - **Scheduler** — inspect jobs from the real scheduler database.
 
 ## Under the hood
@@ -36,16 +38,15 @@ The backend is FastAPI; the frontend is a small dependency-free SPA in
 (`~/.agentkai/runs/<run_id>/events.jsonl`); the dashboard replays and
 live-streams those events over Server-Sent Events.
 
-Honest v1 note: the chat page currently streams from a stubbed run
-simulation while the real agent-core wiring lands — the API contract
-(`src/agentkai/dashboard/API.md`) is stable and won't change when the
-real loop is plugged in. Scheduler and memory pages already read the
+The chat page drives the real agent loop (`agentkai.agent.Agent`) — the
+API contract (`src/agentkai/dashboard/API.md`) documents every endpoint
+and event shape. Scheduler and memory pages read (and now write) the
 real stores.
 
 ## API
 
 The full endpoint contract is documented in
 `src/agentkai/dashboard/API.md` (installed with the package): auth,
-event shapes, and every `/api/*` endpoint, plus the planned additions
-(memory editing, approval cards). Scheduler job management (create,
-delete, manual run) shipped in v0.2.0 and is documented there too.
+event shapes, and every `/api/*` endpoint. Scheduler job management
+(create, delete, manual run) shipped in v0.2.0; memory editing (PUT with
+`.bak` backup) and the tool registry listing shipped in v0.3.0.

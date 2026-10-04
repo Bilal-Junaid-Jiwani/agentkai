@@ -48,6 +48,25 @@ class Memory:
         """
         self._path(self._resolve_section(section)).write_text(text, encoding="utf-8")
 
+    def replace(self, name: str, text: str) -> tuple[bool, str | None]:
+        """Replace a root-level memory file, keeping the previous version.
+
+        The old content is preserved via an atomic rename to a
+        ``<name>.bak`` sidecar before the new content is written.
+
+        Returns ``(created, backup)``: ``created`` is True when the file did
+        not exist before; ``backup`` is the backup filename (``"<name>.bak"``)
+        or None when there was no previous version to keep.
+        """
+        p = self._path(name)
+        created = not p.exists()
+        backup: str | None = None
+        if not created:
+            backup = name + ".bak"
+            p.replace(self._path(backup))  # atomic: old content is the .bak
+        p.write_text(text, encoding="utf-8")
+        return created, backup
+
     def append(self, name: str, content: str) -> None:
         p = self._path(name)
         prev = p.read_text(encoding="utf-8") if p.exists() else ""

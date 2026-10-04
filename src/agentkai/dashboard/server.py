@@ -37,9 +37,10 @@ from ..memory import Memory
 from ..permissions import Action, PermissionGate
 from ..providers import ALIASES, ProviderConfig, resolve_model
 from ..scheduler import Job, Scheduler, parse_at, parse_cron
+from ..tools import default_registry
 
 STATIC_DIR = Path(__file__).parent / "static"
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 DEFAULT_MODEL_ALIAS = "claude"
 APPROVAL_TIMEOUT_S = 600.0  # how long a chat approval card waits for a click
@@ -163,6 +164,14 @@ class JobUpsertRequest(BaseModel):
     model_alias: str = "claude"
     job_type: str = "cron"
     enabled: bool = True
+
+
+class MemoryWriteRequest(BaseModel):
+    content: str
+
+
+# Cap a single memory write: the dashboard edits markdown files, not blobs.
+MAX_MEMORY_BYTES = 1_000_000
 
 
 def _validate_job_payload(body: JobUpsertRequest) -> Job:
@@ -359,7 +368,8 @@ async def _run_agent(app: FastAPI, store: RunStore, run_id: str,
 def create_app(token: str | None = None,
                agent_factory: Callable[[str, PermissionGate], Agent]
                | None = None,
-               scheduler: Scheduler | None = None) -> FastAPI:
+               scheduler: Scheduler | None = None,
+               memory: Memory | None = None) -> FastAPI:
     """Build the dashboard app. A random token is generated per launch;
     pass an explicit token only in tests.
 
@@ -370,12 +380,20 @@ def create_app(token: str | None = None,
     ``scheduler`` may be a pre-built :class:`~agentkai.scheduler.Scheduler`
     (tests inject one backed by a temp SQLite file); the default is the
     real user store at ``~/.agentkai/scheduler.db``.
+
+    ``memory`` may be a pre-built :class:`~agentkai.memory.Memory`
+    (tests inject one rooted at a temp dir); the default is the real user
+    store at ``~/.agentkai/memory``.
     """
     token = token or secrets.token_urlsafe(32)
     store = RunStore()
     started_at = time.time()
-    memory = Memory()
+    memory = memory or Memory()
     scheduler = scheduler or Scheduler()
+    # The built-in tool set is static, but chat runs build per-run
+    # registries: build one listing source per app launch. MCP-attached
+    # remote tools are per-run and are not listed here (see API.md).
+    tool_registry = default_registry()
 
     app = FastAPI(title="agentkai dashboard", docs_url=None, redoc_url=None,
                   openapi_url=None)
@@ -485,7 +503,7 @@ def create_app(token: str | None = None,
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
-    # ---- memory (real Memory class, read-only for now) ----
+    # ---- memory: real Memory class, full read/write (backup kept) ----
     @app.get("/api/memory")
     async def memory_list():
         names = ["SOUL.md", "USER.md", "MEMORY.md",
@@ -507,6 +525,29 @@ def create_app(token: str | None = None,
         if not content and not (memory.root / name).exists():
             raise HTTPException(404, "no such memory file")
         return {"name": name, "content": content}
+
+    @app.put("/api/memory/{name}")
+    async def memory_write(name: str, req: MemoryWriteRequest):
+        if "/" in name or "\\" in name or ".." in name:
+            raise HTTPException(400, "invalid name")
+        raw = req.content.encode("utf-8")
+        if len(raw) > MAX_MEMORY_BYTES:
+            raise HTTPException(
+                400, f"content too large ({len(raw)} bytes; "
+                     f"max {MAX_MEMORY_BYTES})")
+        # Disk I/O leaves the event loop via to_thread (same pattern as
+        # scheduler job runs); the rename inside Memory.replace is atomic.
+        created, backup = await asyncio.to_thread(memory.replace, name,
+                                                  req.content)
+        return JSONResponse(
+            {"name": name, "created": created, "backup": backup,
+             "bytes": len(raw)},
+            status_code=201 if created else 200)
+
+    # ---- tools: built-in registry listing (metadata only) ----
+    @app.get("/api/tools")
+    async def tool_registry_list():
+        return {"tools": tool_registry.describe()}
 
     # ---- scheduler: real Scheduler class, full job management ----
     @app.get("/api/scheduler/jobs")

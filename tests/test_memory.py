@@ -111,3 +111,17 @@ def test_search_multi_term(mem):
 def test_search_missing_root_is_empty(tmp_path):
     m = Memory(root=tmp_path / "fresh")
     assert m.search("anything") == []
+
+
+def test_replace_creates_and_backs_up(mem):
+    created, backup = mem.replace("NOTES.md", "first version")
+    assert created is True
+    assert backup is None
+    assert mem.read("NOTES.md") == "first version"
+
+    created, backup = mem.replace("NOTES.md", "second version")
+    assert created is False
+    assert backup == "NOTES.md.bak"
+    assert mem.read("NOTES.md") == "second version"
+    # the old content survives in the sidecar, byte-identical
+    assert mem.read("NOTES.md.bak") == "first version"

@@ -74,6 +74,8 @@ to configure it — nothing is faked.
 | GET | `/api/events` | `text/event-stream`: live activity feed across all runs (no replay), `: ping` keepalives |
 | GET | `/api/memory` | `{root, files: [{name, exists}]}` — SOUL/USER/MEMORY/AGENTS/IDENTITY/TOOLS.md + daily logs (wired to the real `Memory` class) |
 | GET | `/api/memory/{name}` | `{name, content}` — 400 on path traversal, 404 if missing |
+| PUT | `/api/memory/{name}` | body `{content}` → `{name, created, backup, bytes}`. Replaces a memory file (same root-level name rules as the GET); the previous version is kept as a `{name}.bak` sidecar via atomic rename (`backup` is the `.bak` filename, or `null` when the file is new). 400 on path traversal or content over 1 MiB; 201 on create, 200 on update |
+| GET | `/api/tools` | `{tools: [{name, description, risk}]}` — the built-in tool registry (name, one-line description, `low`/`medium`/`high` risk). MCP-attached remote tools are per-run and are not listed here |
 | GET | `/api/scheduler/jobs` | `{db, jobs: [{name, schedule, command, prompt, model_alias, job_type, enabled, last_run}]}` — wired to the real `Scheduler` SQLite store |
 | POST | `/api/scheduler/jobs` | body `{name, schedule, command?, prompt?, model_alias?, job_type?, enabled?}` → `{ok, name, created, job}`. Creates or updates a job; `schedule` is a 5-field cron or `@at:<ISO>` for one-shots (type `at`). `command` or `prompt` required for `cron`/`at` types. 400 on invalid schedule/type/payload; 201 on create, 200 on update |
 | DELETE | `/api/scheduler/jobs/{name}` | → `{ok, name}`. 404 if unknown |
@@ -81,5 +83,4 @@ to configure it — nothing is faked.
 
 ## Roadmap (contract additions, not changes)
 
-- `PUT /api/memory/{name}` — edit memory files (with backup)
-- `GET /api/tools` — tool registry listing
+No pending items — memory editing and the tool registry shipped in v0.3.0.

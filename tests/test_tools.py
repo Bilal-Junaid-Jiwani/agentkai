@@ -202,3 +202,15 @@ def test_fetch_url_rejects_unresolvable(reg, monkeypatch):
     monkeypatch.setattr(tools_mod.socket, "getaddrinfo", boom)
     result = reg.get("fetch_url").run(url="http://nonexistent.invalid/")
     assert isinstance(result, str) and result.startswith("ERROR:")
+
+
+def test_registry_describe_exposes_public_metadata(reg):
+    desc = reg.describe()
+    assert isinstance(desc, list) and desc
+    for entry in desc:
+        assert set(entry) == {"name", "description", "risk"}
+        assert entry["risk"] in ("low", "medium", "high")
+    # names line up with the registry itself
+    assert {e["name"] for e in desc} == set(reg.names())
+    # no callables leak into the listing
+    assert not any(callable(e["description"]) for e in desc)

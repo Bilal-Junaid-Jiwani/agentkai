@@ -129,6 +129,15 @@ class Registry:
     def names(self) -> list[str]:
         return list(self._tools)
 
+    def describe(self) -> list[dict]:
+        """Public metadata for every registered tool (no callables).
+
+        Names, one-line descriptions, and risk levels — safe to expose to a
+        UI or serialize. The functions themselves stay server-side.
+        """
+        return [{"name": t.name, "description": t.description, "risk": t.risk}
+                for t in self._tools.values()]
+
 
 # ---- sandbox / path helpers ------------------------------------------------
 

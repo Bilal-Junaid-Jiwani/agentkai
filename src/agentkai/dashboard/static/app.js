@@ -76,7 +76,8 @@
 
   /* ---------------- router ---------------- */
   var TITLES = { chat: "Chat", runs: "Runs", memory: "Memory",
-                 scheduler: "Scheduler", settings: "Settings" };
+                 scheduler: "Scheduler", tools: "Tools",
+                 settings: "Settings" };
   var currentES = null;
   function closeStream() {
     if (currentES) { try { currentES.close(); } catch (e) {} currentES = null; }
@@ -93,7 +94,8 @@
       a.classList.toggle("active", a.getAttribute("data-route") === page);
     });
     ({ chat: renderChat, runs: renderRuns, memory: renderMemory,
-       scheduler: renderScheduler, settings: renderSettings })[page](arg);
+       scheduler: renderScheduler, tools: renderTools,
+       settings: renderSettings })[page](arg);
   }
   window.addEventListener("hashchange", route);
 
@@ -354,6 +356,7 @@
       '<div class="mem-layout"><div class="card"><h3>Files</h3>' +
       '<div class="file-list" id="mem-files"></div></div>' +
       '<div class="card"><h3 id="mem-title">Select a file</h3>' +
+      '<div id="mem-actions"></div>' +
       '<div class="md-body" id="mem-body"><p class="muted">Pick a memory file to read it.</p></div></div></div>';
     api("/api/memory").then(function (d) {
       var list = document.getElementById("mem-files");
@@ -366,6 +369,7 @@
           Array.prototype.forEach.call(list.children, function (c) { c.classList.remove("active"); });
           b.classList.add("active");
           document.getElementById("mem-title").textContent = f.name;
+          document.getElementById("mem-actions").innerHTML = "";
           var body = document.getElementById("mem-body");
           if (!f.exists) {
             body.innerHTML = '<p class="muted">Not created yet — the agent writes this file on first run.</p>';
@@ -373,7 +377,7 @@
           }
           body.innerHTML = '<p class="muted">Loading…</p>';
           api("/api/memory/" + encodeURIComponent(f.name)).then(function (r) {
-            document.getElementById("mem-body").innerHTML = md(r.content) || '<p class="muted">(empty)</p>';
+            showMemoryFile(f.name, r.content);
           }).catch(function (e) {
             document.getElementById("mem-body").innerHTML = '<p class="muted">' + esc(e.message) + "</p>";
           });
@@ -381,6 +385,83 @@
         list.appendChild(b);
       });
       if (list.children[0]) list.children[0].click();
+    }).catch(function (e) { view.innerHTML = errHtml(e); });
+  }
+
+  function showMemoryFile(name, content) {
+    var body = document.getElementById("mem-body");
+    var actions = document.getElementById("mem-actions");
+    body.innerHTML = md(content) || '<p class="muted">(empty)</p>';
+    var edit = document.createElement("button");
+    edit.className = "btn";
+    edit.textContent = "Edit";
+    edit.addEventListener("click", function () { editMemoryFile(name, content); });
+    actions.innerHTML = "";
+    actions.appendChild(edit);
+  }
+
+  function editMemoryFile(name, content) {
+    var body = document.getElementById("mem-body");
+    var actions = document.getElementById("mem-actions");
+    var ta = document.createElement("textarea");
+    ta.id = "mem-edit";
+    ta.rows = 24;
+    ta.value = content;
+    ta.style.width = "100%";
+    ta.className = "mono";
+    body.innerHTML = "";
+    body.appendChild(ta);
+    actions.innerHTML = "";
+    var save = document.createElement("button");
+    save.className = "btn";
+    save.textContent = "Save";
+    var cancel = document.createElement("button");
+    cancel.className = "btn";
+    cancel.textContent = "Cancel";
+    var note = document.createElement("span");
+    note.className = "muted";
+    actions.appendChild(save);
+    actions.appendChild(cancel);
+    actions.appendChild(note);
+    cancel.addEventListener("click", function () { showMemoryFile(name, content); });
+    save.addEventListener("click", function () {
+      save.disabled = true;
+      note.textContent = " Saving…";
+      api("/api/memory/" + encodeURIComponent(name), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: ta.value })
+      }).then(function (r) {
+        var msg = "Saved.";
+        if (r.backup) msg += " Previous version kept as " + r.backup + ".";
+        showMemoryFile(name, ta.value);
+        document.getElementById("mem-actions").appendChild(
+          Object.assign(document.createElement("span"),
+                        { className: "muted", textContent: " " + msg }));
+      }).catch(function (e) {
+        note.textContent = " " + e.message;
+        save.disabled = false;
+      });
+    });
+  }
+
+  /* ---------------- tools ---------------- */
+  function renderTools() {
+    view.innerHTML =
+      '<div class="card"><h3>Built-in tools</h3>' +
+      '<p class="muted">Every capability the agent can call, with its risk level. ' +
+      "MCP-attached remote tools are per-run and aren't listed here.</p>" +
+      '<div id="tools-body"><p class="muted">Loading…</p></div></div>';
+    api("/api/tools").then(function (d) {
+      var rows = d.tools.map(function (t) {
+        var pill = t.risk === "high" ? "error" : (t.risk === "medium" ? "running" : "done");
+        return "<tr><td class='mono'><strong>" + esc(t.name) + "</strong></td>" +
+          "<td>" + esc(t.description) + "</td>" +
+          '<td><span class="status-pill ' + pill + '">' + esc(t.risk) + "</span></td></tr>";
+      }).join("");
+      document.getElementById("tools-body").innerHTML =
+        '<table class="tbl"><thead><tr><th>Tool</th><th>Description</th><th>Risk</th></tr></thead><tbody>' +
+        rows + "</tbody></table>";
     }).catch(function (e) { view.innerHTML = errHtml(e); });
   }
 
@@ -506,6 +587,8 @@
       "<li><code>POST /api/runs/{id}/approve</code> — resolve a pending approval</li>" +
       "<li><code>GET /api/events?run_id=…</code> — SSE stream of run events (live activity feed without run_id)</li>" +
       "<li><code>GET /api/memory</code> · <code>GET /api/memory/{name}</code> — browse memory files</li>" +
+      "<li><code>PUT /api/memory/{name}</code> — edit a memory file (body <code>{content}</code>); the previous version is kept as <code>{name}.bak</code>. 400 on path traversal or oversize content; 201 on create, 200 on update</li>" +
+      "<li><code>GET /api/tools</code> — built-in tool registry: name, description, and risk level per tool</li>" +
       "<li><code>GET /api/scheduler/jobs</code> — cron jobs from the SQLite store</li>" +
       "<li><code>POST /api/scheduler/jobs</code> · <code>DELETE /api/scheduler/jobs/{name}</code> · <code>POST /api/scheduler/jobs/{name}/run</code> — job management + manual trigger</li>" +
       "</ul><p class='muted'>Full contract: <code>src/agentkai/dashboard/API.md</code></p></div></div>";

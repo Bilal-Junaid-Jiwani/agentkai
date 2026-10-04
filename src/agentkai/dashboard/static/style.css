@@ -177,6 +177,20 @@ a.link:hover { text-decoration: underline; }
 .btn:active { transform: scale(0.97); }
 .btn:disabled { opacity: 0.5; cursor: default; }
 
+/* ---------- memory editing ---------- */
+#mem-actions { margin-bottom: 10px; }
+#mem-actions .btn { padding: 8px 18px; }
+#mem-actions .muted { margin-left: 6px; }
+#mem-edit {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  font-size: 13px;
+  box-sizing: border-box;
+}
+
 /* ---------- runs timeline ---------- */
 .run-head { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; }
 .run-head h2 { margin: 0; font-size: 16px; }
