@@ -88,6 +88,19 @@ def dashboard(port: int = typer.Option(8931, "--port", "-p",
     run_dashboard(port=port)
 
 
+@app.command()
+def doctor(json_output: bool = typer.Option(
+        False, "--json", help="Machine-readable JSON report")):
+    """Check the environment: config, provider keys, scheduler DB, memory,
+    tools, media providers, dashboard assets. Exits 1 on any [FAIL]."""
+    from . import doctor as doctor_mod
+    checks = doctor_mod.run_checks()
+    typer.echo(doctor_mod.format_json(checks)
+               if json_output else doctor_mod.format_text(checks))
+    if doctor_mod.has_failures(checks):
+        raise typer.Exit(code=1)
+
+
 # -- scheduler ---------------------------------------------------------------
 
 scheduler_app = typer.Typer(help="Scheduled agent jobs: cron, one-shot, "

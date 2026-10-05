@@ -1,5 +1,16 @@
 # Troubleshooting
 
+Start here:
+
+```bash
+agentkai doctor
+```
+
+It checks the config file, provider keys, scheduler database, memory
+tree, tool registry, image media providers, and the bundled dashboard
+assets, then prints one `[OK]`/`[WARN]`/`[FAIL]` line per check (exit
+code 1 when anything fails). `--json` gives a machine-readable report.
+
 ## Install / CLI
 
 **`agentkai: command not found`** — the pip install didn't put scripts

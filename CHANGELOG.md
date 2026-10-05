@@ -3,6 +3,23 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.4.0] - 2026-10-05
+
+### Added
+- `agentkai doctor`: read-only environment diagnostics. Checks the agent
+  home, `config.yaml` (fails on unparseable YAML — the config loader
+  itself silently ignores it), provider API-key status for every model
+  alias (warns when the default model's key is missing), the scheduler
+  SQLite database (job counts plus failures in the last 24h; fails on a
+  corrupt/unreadable DB), the memory tree, the built-in tool registry
+  (fails on unknown risk levels), image media providers (OpenAI key,
+  local Stable Diffusion server, or an honest warning), and the bundled
+  dashboard static assets (fails on missing `index.html`, which would
+  mean broken packaging). Prints `[OK]`/`[WARN]`/`[FAIL]` per check,
+  exits 1 on any failure; `--json` for a machine-readable report.
+  13 new tests in `tests/test_doctor.py`; README CLI table,
+  `docs/quickstart.md`, and `docs/troubleshooting.md` document it.
+
 ## [0.3.0] - 2026-10-04
 
 ### Added

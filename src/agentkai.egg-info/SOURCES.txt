@@ -7,6 +7,7 @@ src/agentkai/__init__.py
 src/agentkai/agent.py
 src/agentkai/browser.py
 src/agentkai/cli.py
+src/agentkai/doctor.py
 src/agentkai/events.py
 src/agentkai/goals.py
 src/agentkai/mcp.py
@@ -78,6 +79,7 @@ tests/test_channels.py
 tests/test_core.py
 tests/test_dashboard.py
 tests/test_devices.py
+tests/test_doctor.py
 tests/test_goals.py
 tests/test_integration.py
 tests/test_mcp.py

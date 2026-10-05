@@ -72,6 +72,7 @@ to whichever model you choose, on your own machine.
 | `agentkai run PROMPT` | run one agent task with live streaming output |
 | `agentkai chat PROMPT` | send one prompt, print the final answer |
 | `agentkai models` | show model aliases and what they resolve to |
+| `agentkai doctor` | check the setup: config, provider keys, scheduler DB, memory, tools, media providers, dashboard assets (exits 1 on any [FAIL]) |
 | `agentkai dashboard` | launch the local web dashboard (127.0.0.1 only, token-secured) |
 | `agentkai gateway` | run the messaging gateway daemon (Telegram/Discord/WebChat/WhatsApp) |
 | `agentkai scheduler add/list/remove/run-once/run-due` | manage scheduled agent jobs |
