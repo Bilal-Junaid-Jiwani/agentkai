@@ -14,6 +14,7 @@ from agentkai.agent import Agent, estimate_tokens
 from agentkai.events import EventLog, list_runs, replay, summarize
 from agentkai.permissions import Action, PermissionGate
 from agentkai.providers import (
+    LLMClient,
     LLMMessage,
     ToolCall,
     normalize_tool_calls,
@@ -279,6 +280,61 @@ def test_alias_fallbacks():
 
 def test_custom_aliases_override():
     assert resolve_model("work", {"work": "openai/gpt-4o"}) == "openai/gpt-4o"
+
+
+class _TextChunk:
+    """Minimal streaming chunk shape for LLMClient._generate_once."""
+
+    def __init__(self, text: str):
+        from types import SimpleNamespace
+        self.choices = [SimpleNamespace(
+            delta=SimpleNamespace(content=text, tool_calls=None),
+            message=None)]
+        self.usage = None
+
+
+def test_generate_retries_entire_fallback_chain():
+    """A failure on the first fallback must not abort the rest of the chain.
+
+    Regression: the loop used to retry only after the primary failed, so a
+    down first fallback raised without ever trying the remaining models.
+    """
+    tried: list[str] = []
+
+    def flaky(model, messages, tools=None, stream=True, **kwargs):
+        tried.append(model)
+        if model == "gpt-4o":  # last model in claude's chain
+            return iter([_TextChunk("ok from fallback")])
+        raise RuntimeError(f"provider down: {model}")
+
+    client = LLMClient(model="claude", completion_fn=flaky)
+    assert len(client.models_tried()) >= 3  # primary + >=2 fallbacks
+    msg = client.generate([{"role": "user", "content": "hi"}])
+    assert msg.text == "ok from fallback"
+    assert tried == client.models_tried()  # the whole chain was walked
+
+
+def test_generate_raises_after_chain_exhausted():
+    """When every model fails, the error names every model that was tried."""
+    def always_down(model, messages, tools=None, stream=True, **kwargs):
+        raise RuntimeError(f"provider down: {model}")
+
+    client = LLMClient(model="claude", completion_fn=always_down)
+    with pytest.raises(RuntimeError, match="all models failed") as exc_info:
+        client.generate([{"role": "user", "content": "hi"}])
+    for model in client.models_tried():
+        assert model in str(exc_info.value)
+
+
+def test_generate_without_fallbacks_raises_on_first_failure():
+    """Aliases with an empty chain (e.g. "local") fail fast, unchanged."""
+    def down(model, messages, tools=None, stream=True, **kwargs):
+        raise RuntimeError("provider down")
+
+    client = LLMClient(model="local", completion_fn=down)
+    assert client.models_tried() == ["ollama/qwen3:32b"]
+    with pytest.raises(RuntimeError, match="all models failed"):
+        client.generate([{"role": "user", "content": "hi"}])
 
 
 # -- 6. normalization --------------------------------------------------------------

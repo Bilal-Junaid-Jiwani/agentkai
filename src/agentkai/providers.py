@@ -365,9 +365,9 @@ class LLMClient:
                 raise
             except Exception as exc:  # noqa: BLE001 - fallbacks need this
                 last_exc = exc
-                if attempt == 0 and self.fallback_models:
-                    continue  # error is logged by the caller via ErrorEvent
-                tried = ", ".join(self.models_tried()[: attempt + 1])
+                if attempt < len(self.models_tried()) - 1:
+                    continue  # try the next model in the chain
+                tried = ", ".join(self.models_tried())
                 raise RuntimeError(
                     f"all models failed [{tried}]: {exc}") from exc
         raise last_exc or RuntimeError("no models configured")

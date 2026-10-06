@@ -3,6 +3,19 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.4.1] - 2026-10-06
+
+### Fixed
+- `LLMClient.generate` now retries the **whole** fallback chain, not just
+  the first fallback. Previously the retry loop bailed out after the first
+  fallback failed (`attempt == 0` only), so a request could raise
+  "all models failed" without ever trying the remaining models in the
+  chain — contradicting the documented fallback behavior in
+  `docs/models.md`. The final error now also names every model that was
+  actually tried. Three regression tests in `tests/test_core.py` cover the
+  full-chain retry, the exhausted-chain error, and the no-fallback fast
+  path.
+
 ## [0.4.0] - 2026-10-05
 
 ### Added
