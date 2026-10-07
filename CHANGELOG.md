@@ -3,6 +3,22 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.5.0] - 2026-10-07
+
+### Added
+- `agentkai runs list` / `agentkai runs show RUN_ID`: inspect past runs
+  from the terminal, without opening the dashboard. `list` shows
+  newest-first run summaries (status, model, tools used) with `--limit`
+  and `--json`; `show` replays one run's `events.jsonl` in order
+  (run start, LLM messages, tool calls/results, approvals, run end),
+  also with `--json`. Both honor `$AGENTKAI_HOME` like the rest of the
+  CLI. Until now the event log was only reachable through the dashboard
+  API or by reading the JSONL files by hand, even though
+  `events.list_runs`/`summarize`/`replay` have been public API since
+  0.1.0. Six new tests in `tests/test_runs_cli.py` seed real event logs
+  and cover empty state, ordering, `--limit`, both `--json` modes, and
+  the unknown-run error (exit 1).
+
 ## [0.4.1] - 2026-10-06
 
 ### Fixed

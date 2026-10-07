@@ -101,6 +101,95 @@ def doctor(json_output: bool = typer.Option(
         raise typer.Exit(code=1)
 
 
+# -- runs --------------------------------------------------------------------
+
+runs_app = typer.Typer(help="Inspect past agent runs (event logs)")
+app.add_typer(runs_app, name="runs")
+
+
+def _runs_root():
+    from .media import agentkai_home
+    return agentkai_home() / "runs"
+
+
+def _short_text(value, n: int = 80) -> str:
+    s = str(value).replace("\n", " ")
+    return s if len(s) <= n else s[:n] + "…"
+
+
+def _describe_event(ev) -> str:
+    """One-line rendering of a replayed event for `runs show`."""
+    d = ev.data
+    head = f"#{ev.seq:<4} {ev.ts}  {ev.type}"
+    if ev.type == "run_start":
+        return (f"{head}  model={d.get('model', '?')} "
+                f"prompt={_short_text(d.get('prompt', ''))!r}")
+    if ev.type == "llm_message":
+        return f"{head}  {_short_text(d.get('text', ''))!r}"
+    if ev.type == "tool_call":
+        return f"{head}  {d.get('name', '?')}({_short_text(d.get('args', {}), 60)})"
+    if ev.type == "tool_result":
+        state = "ok" if d.get("ok", True) else "FAILED"
+        return (f"{head}  {d.get('name', '?')} [{state}] "
+                f"{_short_text(d.get('output', ''))!r}")
+    if ev.type == "approval":
+        return f"{head}  {d.get('tool')}:{d.get('decision')}"
+    if ev.type == "run_end":
+        return (f"{head}  status={d.get('status', '?')} "
+                f"final={_short_text(d.get('final_text', ''))!r}")
+    return head
+
+
+@runs_app.command("list")
+def runs_list(limit: int = typer.Option(20, "--limit", "-n",
+                                        help="Max runs (newest first)"),
+              json_output: bool = typer.Option(
+                  False, "--json", help="Machine-readable JSON output")):
+    """List past runs, newest first (status, model, tools used)."""
+    import json as _json
+
+    from . import events
+
+    root = _runs_root()
+    run_ids = events.list_runs(root=root)[:max(limit, 0)]
+    rows = [events.summarize(run_id, root=root) for run_id in run_ids]
+    if json_output:
+        typer.echo(_json.dumps(rows, indent=2, default=str))
+        return
+    if not rows:
+        typer.echo('no runs yet — `agentkai run "..."` creates one')
+        return
+    for r in rows:
+        tools = ", ".join(r["tool_calls"][:6]) or "-"
+        if len(r["tool_calls"]) > 6:
+            tools += ", …"
+        typer.echo(f"{r['run_id']:14} [{r['status']}] {r['model'] or '?'} "
+                   f"tools: {tools}")
+
+
+@runs_app.command("show")
+def runs_show(run_id: str = typer.Argument(..., help="Run id"),
+              json_output: bool = typer.Option(
+                  False, "--json", help="Machine-readable JSON output")):
+    """Replay one run's event log, in order."""
+    import json as _json
+
+    from . import events
+
+    root = _runs_root()
+    try:
+        evs = list(events.replay(run_id, root=root))
+    except FileNotFoundError:
+        typer.echo(f"no run {run_id!r} (looked in {root})", err=True)
+        raise typer.Exit(code=1)
+    if json_output:
+        typer.echo(_json.dumps([e.to_dict() for e in evs],
+                               indent=2, default=str))
+        return
+    for ev in evs:
+        typer.echo(_describe_event(ev))
+
+
 # -- scheduler ---------------------------------------------------------------
 
 scheduler_app = typer.Typer(help="Scheduled agent jobs: cron, one-shot, "
