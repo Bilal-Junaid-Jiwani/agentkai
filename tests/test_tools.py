@@ -1,5 +1,6 @@
 """Tests for the safe tool registry. No network access."""
 import os
+import time
 
 import pytest
 
@@ -104,6 +105,24 @@ def test_exec_timeout(reg):
     result = reg.get("exec").run(command="sleep 5", timeout=1)
     assert result["exit_code"] == -1
     assert "timed out" in result["output"]
+
+
+def test_exec_timeout_kills_process_group(reg, tmp_path):
+    # Regression: on timeout the whole process group must die, not just
+    # the shell — a backgrounded child used to survive the timeout.
+    result = reg.get("exec").run(
+        command="sleep 30 & echo $! > child.pid; wait", timeout=1)
+    assert result["exit_code"] == -1
+    pid = int((tmp_path / "child.pid").read_text().strip())
+    for _ in range(50):  # allow the SIGKILL a moment to land
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.1)
+    else:
+        os.kill(pid, 9)  # don't leak the survivor if the fix regresses
+        pytest.fail(f"background child {pid} survived the exec timeout")
 
 
 def test_exec_blocklist(reg):

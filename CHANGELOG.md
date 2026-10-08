@@ -3,6 +3,19 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.5.1] - 2026-10-08
+
+### Fixed
+- The `exec` tool now kills the whole process group when a command times
+  out, as its own `start_new_session` comment always intended.
+  Previously `subprocess.run` killed only the shell itself, so anything
+  the command had backgrounded (e.g. `sleep 60 & wait`) silently
+  survived the timeout and kept running on the user's machine. The
+  timeout path now SIGKILLs the process group and reaps it, returning
+  the same `{exit_code: -1, "ERROR: timed out …"}` result as before.
+  Regression test in `tests/test_tools.py` backgrounds a child, records
+  its PID, and asserts it is gone after the timeout.
+
 ## [0.5.0] - 2026-10-07
 
 ### Added

@@ -223,20 +223,34 @@ def _make_exec(roots: list[Path], default_cwd: Path):
         if not cwd.is_dir():
             return f"ERROR: workdir is not a directory: {workdir!r}"
         try:
-            proc = subprocess.run(
+            proc = subprocess.Popen(
                 command,
                 shell=True,
                 cwd=cwd,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=timeout,
-                start_new_session=True,  # so we can kill the whole group
+                start_new_session=True,  # own process group, killed as one
             )
+        except OSError as exc:
+            return f"ERROR: could not start command: {exc}"
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
+            # Kill the whole process group, not just the shell: children
+            # the command backgrounded would otherwise outlive the timeout.
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+            try:
+                proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
             return {"exit_code": -1, "output": f"ERROR: timed out after {timeout}s"}
-        out = (proc.stdout or "")[-MAX_OUTPUT_CHARS:]
-        if proc.stderr:
-            out += "\n[stderr]\n" + proc.stderr[-2000:]
+        out = (stdout or "")[-MAX_OUTPUT_CHARS:]
+        if stderr:
+            out += "\n[stderr]\n" + stderr[-2000:]
         return {"exit_code": proc.returncode, "output": out}
 
     return _exec
