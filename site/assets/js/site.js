@@ -1,4 +1,4 @@
-/* agentkai website — site.js (vanilla, no dependencies)
+/* agentkai website :  site.js (vanilla, no dependencies)
    Progressive enhancement only: all content is readable with JS off. */
 (function () {
   "use strict";
@@ -78,47 +78,6 @@
     }, 4000);
   }
 
-  /* ---------- hero terminal typing ---------- */
-  var typed = document.getElementById("typedCmd");
-  var termOut = document.getElementById("termOut");
-  if (typed && termOut && !reducedMotion) {
-    var fullText = typed.textContent;
-    var lines = Array.prototype.slice.call(termOut.children);
-    lines.forEach(function (l) { l.style.opacity = "0"; });
-    typed.textContent = "";
-    var started = false;
-    function typeStep(i) {
-      typed.textContent = fullText.slice(0, i);
-      if (i < fullText.length) {
-        setTimeout(function () { typeStep(i + 1); }, 26 + Math.random() * 30);
-      } else {
-        lines.forEach(function (l, idx) {
-          setTimeout(function () {
-            l.style.transition = "opacity 0.45s ease";
-            l.style.opacity = "1";
-          }, 260 + idx * 300);
-        });
-      }
-    }
-    var heroIO = new IntersectionObserver(function (entries) {
-      entries.forEach(function (entry) {
-        if (entry.isIntersecting && !started) {
-          started = true;
-          setTimeout(function () { typeStep(0); }, 350);
-          heroIO.disconnect();
-        }
-      });
-    }, { threshold: 0.35 });
-    heroIO.observe(typed);
-    /* safety net */
-    setTimeout(function () {
-      if (!started) {
-        typed.textContent = fullText;
-        lines.forEach(function (l) { l.style.opacity = "1"; });
-      }
-    }, 5000);
-  }
-
   /* ---------- CLI tabs (examples verified against `agentkai --help`) ---------- */
   var SNIPPETS = {
     run: '<span class="c"># run one agent task, streaming</span>\n' +
@@ -149,7 +108,7 @@
       '<span class="c"># media payments places shopping spotify travel voice</span>\n' +
       '<span class="a">agentkai</span> skills list\n' +
       '<span class="g">github ✓   gmail ✓   google_calendar ✓   health ✓   …</span>\n' +
-      '<span class="c"># installs are hash-verified before any skill code runs (v0.5.2)</span>'
+      '<span class="c"># installs are hash-verified before any skill code runs</span>'
   };
   var pre = document.getElementById("cliPre");
   document.querySelectorAll(".cli-tab").forEach(function (tab) {

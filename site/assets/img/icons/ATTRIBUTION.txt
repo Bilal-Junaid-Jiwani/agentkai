@@ -1,0 +1,2 @@
+Icons in this directory are from Phosphor Icons (https://phosphoricons.com), MIT License.
+Vendored (not hot-linked) and recolored to the site accent. Copyright (c) Phosphor Icons.
