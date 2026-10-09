@@ -1,7 +1,8 @@
 /* ==========================================================================
    agentkai Docs Site — docs.css
-   Implements docs/DESIGN_TOKENS.md (Worker #2, UX Designer) EXACTLY.
-   Plain CSS, zero dependencies, no external fonts/imports.
+   Redesigned 2026-10-09 to the neon-terminal identity of site/ (tokens
+   mirror site/assets/css/site.css). Plain CSS, zero JS dependencies;
+   IBM Plex Sans/Mono are loaded by each page's <head>, as on the site.
    All asset references are relative.
    ========================================================================== */
 
@@ -9,42 +10,41 @@
    1. Tokens — full :root set from DESIGN_TOKENS.md §1, §2, §6
    -------------------------------------------------------------------------- */
 :root {
-  --bg: #0D1017;
-  --bg-2: #1C1A15;
-  --surface: #141A24;
-  --surface-2: #262219;
-  --border: #232B3A;
-  --border-strong: #2E3A4F;
-  --text: #E9ECF3;
-  --text-2: #C9C3B2;
-  --text-3: #8E8773;
-  --accent: #F59E0B;
-  --accent-strong: #FBBF24;
-  --accent-dim: #2A2113;
-  --accent-text: #FCD34D;
-  --code-bg: #0A0D13;
-  --code-header-bg: #11161F;
-  --inline-code-bg: #221B0E;
-  --inline-code-fg: #FDE68A;
-  --link: #FBBF24;
-  --link-hover: #FDE68A;
-  --success: #7FB069;
-  --success-bg: #1E2B1C;
-  --warning: #E0A458;
-  --warning-bg: #2E2415;
-  --danger: #DE6B5A;
-  --danger-bg: #2E1B17;
-  --note: #F59E0B;
-  --note-bg: #2A2113;
-  --focus-ring: #F59E0B80;
-  --overlay: #07090DCC;
+  --bg: #06090a;
+  --bg-2: #090e0d;
+  --surface: #0c1210;
+  --surface-2: #101915;
+  --border: #1c2a21;
+  --border-strong: #2b4033;
+  --text: #edf7f1;
+  --text-2: #9db4a6;
+  --text-3: #64796b;
+  --accent: #45eaa9;
+  --accent-strong: #6ff2ba;
+  --accent-dim: rgba(69, 234, 169, 0.09);
+  --accent-text: #45eaa9;
+  --cyan: #4ad8ff;
+  --code-bg: #070b09;
+  --code-header-bg: #0c1210;
+  --inline-code-bg: rgba(69, 234, 169, 0.09);
+  --inline-code-fg: #6ff2ba;
+  --link: #45eaa9;
+  --link-hover: #6ff2ba;
+  --success: #45eaa9;
+  --success-bg: rgba(69, 234, 169, 0.08);
+  --warning: #f5b84c;
+  --warning-bg: rgba(245, 184, 76, 0.08);
+  --danger: #ff7a7a;
+  --danger-bg: rgba(255, 122, 122, 0.08);
+  --note: #4ad8ff;
+  --note-bg: rgba(74, 216, 255, 0.08);
+  --focus-ring: rgba(69, 234, 169, 0.5);
+  --overlay: rgba(3, 7, 5, 0.82);
 
-  --font-serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia,
-                "Charter", "Bitstream Charter", "Sitka Text", "Noto Serif", serif;
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", Roboto,
-               "Helvetica Neue", Arial, "Noto Sans", sans-serif;
-  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas,
-               "Liberation Mono", "DejaVu Sans Mono", monospace;
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system,
+               "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo,
+               Consolas, "Liberation Mono", monospace;
 
   --topbar-h: 64px;
   --tabbar-h: 48px;
@@ -54,8 +54,8 @@
 }
 
 ::selection {
-  background: #F59E0B;
-  color: #0D1017;
+  background: var(--accent);
+  color: #04150c;
 }
 
 /* --------------------------------------------------------------------------
@@ -121,9 +121,9 @@ button {
   top: 0;
   z-index: 50;
   height: var(--topbar-h);
-  background: #0D1017E6; /* 90% opaque --bg */
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  background: rgba(6, 9, 10, 0.72); /* site nav glass */
+  backdrop-filter: blur(14px) saturate(1.4);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
@@ -211,21 +211,25 @@ a.cta,
   align-items: center;
   gap: 0.5rem;
   background: var(--accent);
-  color: #0D1017;
+  color: #04150c;
+  font-family: var(--font-mono);
   font-weight: 600;
-  font-size: 0.875rem;
-  border-radius: 8px;
+  font-size: 0.8125rem;
+  border-radius: 10px;
   padding: 0.5rem 1rem;
   border: 1px solid transparent;
   white-space: nowrap;
-  transition: background-color 120ms ease, color 120ms ease;
+  box-shadow: 0 0 22px rgba(69, 234, 169, 0.25);
+  transition: background-color 120ms ease, color 120ms ease, transform 120ms ease, box-shadow 120ms ease;
 }
 
 a.cta:hover,
 .cta:hover {
   background: var(--accent-strong);
-  color: #0D1017;
+  color: #04150c;
   text-decoration: none;
+  transform: translateY(-1px);
+  box-shadow: 0 0 30px rgba(69, 234, 169, 0.38);
 }
 
 /* Hamburger — visible only <800px */
@@ -517,24 +521,33 @@ h4[id] {
 }
 
 .eyebrow {
-  font-family: var(--font-sans);
+  font-family: var(--font-mono);
   font-size: 0.75rem;
-  font-weight: 700;
+  font-weight: 500;
   line-height: 1.4;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.24em;
   color: var(--accent-text);
   margin: 0 0 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.eyebrow::after {
+  content: "";
+  height: 1px;
+  width: 56px;
+  background: linear-gradient(90deg, var(--accent), transparent);
 }
 
 .title-row h1,
 .prose h1,
 h1.page-title {
-  font-family: var(--font-serif);
+  font-family: var(--font-sans);
   font-size: clamp(2rem, 1.4rem + 3vw, 2.75rem);
   line-height: 1.15;
-  font-weight: 600;
-  letter-spacing: -0.01em;
+  font-weight: 700;
+  letter-spacing: -0.02em;
   color: var(--text);
   margin: 0;
 }
@@ -582,7 +595,7 @@ h1.page-title {
 #copy-page.copied,
 .copy-page.copied {
   color: var(--success);
-  border-color: #7FB06966;
+  border-color: rgba(69, 234, 169, 0.4);
 }
 
 /* --------------------------------------------------------------------------
@@ -609,7 +622,8 @@ h1.page-title {
 .codeblock-lang {
   font-family: var(--font-mono);
   font-size: 0.75rem;
-  color: var(--text-3);
+  letter-spacing: 0.06em;
+  color: var(--cyan);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -725,11 +739,11 @@ pre.codeblock:focus-within > .code-copy {
 }
 
 /* Hand-rolled token colors (§4.5). Comment is --text-3 for 5.11:1 on code-bg. */
-.tok-keyword { color: #E8896B; }
-.tok-string  { color: #A8C686; }
-.tok-comment { color: #8E8773; font-style: italic; }
-.tok-number  { color: #E0A458; }
-.tok-function{ color: #EFCFA4; }
+.tok-keyword { color: #4ad8ff; }
+.tok-string  { color: #6ff2ba; }
+.tok-comment { color: #64796b; font-style: italic; }
+.tok-number  { color: #f5b84c; }
+.tok-function{ color: #a5f3d2; }
 .tok-operator,
 .tok-punct   { color: var(--text-2); }
 
@@ -748,7 +762,7 @@ td code,
   color: var(--inline-code-fg);
   padding: 0.15em 0.375em;
   border-radius: 5px;
-  border: 1px solid #3a3222;
+  border: 1px solid rgba(69, 234, 169, 0.16);
   white-space: nowrap;
 }
 
@@ -862,18 +876,18 @@ pre.codeblock code {
 }
 
 .admonition.note {
-  border-color: #F59E0B66;
+  border-color: rgba(74, 216, 255, 0.4);
   background: var(--note-bg);
   color: var(--text-2);
 }
 
 .admonition.note .admon-title,
 .admonition.note .admonition-icon {
-  color: var(--accent-text);
+  color: var(--note);
 }
 
 .admonition.tip {
-  border-color: #7FB06966;
+  border-color: rgba(69, 234, 169, 0.35);
   background: var(--success-bg);
   color: var(--text-2);
 }
@@ -884,7 +898,7 @@ pre.codeblock code {
 }
 
 .admonition.warning {
-  border-color: #E0A45866;
+  border-color: rgba(245, 184, 76, 0.4);
   background: var(--warning-bg);
   color: var(--text-2);
 }
@@ -895,7 +909,7 @@ pre.codeblock code {
 }
 
 .admonition.danger {
-  border-color: #DE6B5A66;
+  border-color: rgba(255, 122, 122, 0.4);
   background: var(--danger-bg);
   color: var(--text-2);
 }
@@ -1387,6 +1401,13 @@ footer.site-footer {
     display: none;
   }
 
+  /* The mono CTA chip is wider than the old sans chip: without this the
+     topbar overflows a 390px viewport by ~19px. The EN chip is
+     informational only; the docs label is already hidden at this width. */
+  .lang-chip {
+    display: none;
+  }
+
   #search-open {
     padding: 0.4375rem 0.625rem;
   }
@@ -1420,7 +1441,7 @@ footer.site-footer {
   left: 1rem;
   z-index: 200;
   background: var(--accent);
-  color: #0D1017;
+  color: #04150c;
   padding: 0.5rem 1rem;
   border-radius: 8px;
   font-weight: 600;
@@ -1429,7 +1450,7 @@ footer.site-footer {
 }
 .skip-link:focus {
   top: 0.75rem;
-  color: #0D1017;
+  color: #04150c;
   text-decoration: none;
 }
 
@@ -1647,11 +1668,12 @@ footer.site-footer {
 }
 .search-eyebrow {
   display: block;
+  /* cyan: meta label, per site data-label convention */
   font-size: 0.6875rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--accent-text);
+  color: var(--cyan);
   margin-bottom: 0.125rem;
 }
 .search-title {
@@ -1806,7 +1828,7 @@ footer.site-footer {
   max-width: 100%;
   height: auto;
   margin: 1.5rem auto;
-  border: 1px solid var(--border, #2a2a2a);
+  border: 1px solid var(--border, #2b4033);
   border-radius: 10px;
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
 }
