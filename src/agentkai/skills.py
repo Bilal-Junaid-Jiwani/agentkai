@@ -17,6 +17,7 @@ relevant skills with a keyword heuristic.
 """
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -35,6 +36,7 @@ from .tools import Tool
 
 BUNDLED_DIR = Path(__file__).parent / "skills_bundle"
 MANIFEST_NAME = "manifest.json"
+MANIFEST_EXCLUDE = {MANIFEST_NAME}
 
 
 class SkillError(Exception):
@@ -176,6 +178,8 @@ class SkillLoader:
         if name not in entries:
             raise SkillError(f"unknown skill {name!r}")
         source, path = entries[name]
+        if source == "user":
+            _verify_user_skill(path)
         meta = parse_skill_md(path / "SKILL.md")
         if meta["name"] != name:
             raise SkillError(
@@ -263,14 +267,85 @@ def _looks_like_git_url(source: str) -> bool:
             or re.fullmatch(r"[\w.-]+/[\w.-]+", source) is not None)
 
 
+def _resolve_git_url(source: str) -> str:
+    if re.fullmatch(r"[\w.-]+/[\w.-]+", source):
+        return f"https://github.com/{source}.git"
+    return source
+
+
+def _content_sha256(skill_dir: Path) -> str:
+    """SHA-256 over sorted relative paths + file bytes, excluding manifest."""
+    h = hashlib.sha256()
+    files = sorted(
+        (p for p in skill_dir.rglob("*") if p.is_file()
+         and p.name not in MANIFEST_EXCLUDE
+         and ".git" not in p.parts),
+        key=lambda p: p.relative_to(skill_dir).as_posix(),
+    )
+    for p in files:
+        rel = p.relative_to(skill_dir).as_posix()
+        h.update(rel.encode("utf-8"))
+        h.update(b"\0")
+        h.update(p.read_bytes())
+        h.update(b"\0")
+    return h.hexdigest()
+
+
+def _git_head_sha(dest: Path) -> str | None:
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(dest), "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=30)
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    sha = proc.stdout.strip()
+    return sha or None
+
+
+def _verify_user_skill(path: Path) -> None:
+    mf = path / MANIFEST_NAME
+    if not mf.exists():
+        return
+    try:
+        manifest = json.loads(mf.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    expected = manifest.get("content_sha256")
+    if not expected:
+        return
+    got = _content_sha256(path)
+    if got != expected:
+        raise SkillError(
+            f"{path}: skill content drifted since install "
+            f"(expected {expected}, got {got}); "
+            f"reinstall with force to accept")
+
+
 def install_skill(source: str, name: str | None = None,
-                  force: bool = False) -> Path:
+                  force: bool = False,
+                  trust_remote: bool = False,
+                  pin: str | None = None) -> Path:
     """Install a skill into the user skills dir.
 
     ``source`` is a local directory or a git URL (``owner/repo`` expands to
     github.com). Writes ``manifest.json`` with provenance. Returns the
     installed path. Nothing is committed or pushed.
+
+    Remote (git) installs require ``trust_remote=True``: code from the
+    repo runs inside agentkai via ``tools.py``, so cloning is an explicit
+    trust decision. ``pin`` optionally pins the clone to a commit SHA.
     """
+    local_path = Path(source).expanduser()
+    is_local = local_path.is_dir()
+    is_git = (not is_local) and _looks_like_git_url(source)
+    resolved_url = _resolve_git_url(source) if is_git else None
+    if is_git and not trust_remote:
+        raise SkillError(
+            f"remote skill install requires trust: {resolved_url} — "
+            f"code from this repo will run inside agentkai; "
+            f"pass trust_remote=True (CLI: --trust-remote) to proceed")
     skill_name = _skill_name_from_source(source, name)
     dest = user_skills_dir() / skill_name
     if dest.exists():
@@ -280,20 +355,17 @@ def install_skill(source: str, name: str | None = None,
                 f"(use force=True to overwrite)")
         shutil.rmtree(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    local = Path(source).expanduser()
     try:
-        if local.is_dir():
-            shutil.copytree(local, dest)
-        elif _looks_like_git_url(source):
-            url = source
-            if re.fullmatch(r"[\w.-]+/[\w.-]+", source):
-                url = f"https://github.com/{source}.git"
+        if is_local:
+            shutil.copytree(local_path, dest)
+        elif is_git:
+            assert resolved_url is not None
             proc = subprocess.run(
-                ["git", "clone", "--depth", "1", url, str(dest)],
+                ["git", "clone", "--depth", "1", resolved_url, str(dest)],
                 capture_output=True, text=True, timeout=120)
             if proc.returncode != 0:
                 raise SkillError(
-                    f"git clone failed for {url!r}: "
+                    f"git clone failed for {resolved_url!r}: "
                     f"{proc.stderr.strip()[:300]}")
         else:
             raise SkillError(
@@ -302,12 +374,25 @@ def install_skill(source: str, name: str | None = None,
         if not (dest / "SKILL.md").exists():
             raise SkillError(
                 f"{source!r} is not a skill: no SKILL.md found at top level")
-        manifest = {
+        commit_sha: str | None = None
+        if is_git:
+            commit_sha = _git_head_sha(dest)
+            if pin:
+                if commit_sha != pin:
+                    raise SkillError(
+                        f"pin mismatch for {resolved_url!r}: "
+                        f"expected {pin}, got {commit_sha}")
+        manifest: dict[str, Any] = {
             "name": skill_name,
             "source": source,
             "installed_at": datetime.now(timezone.utc).isoformat(),
             "version": parse_skill_md(dest / "SKILL.md")["version"],
         }
+        if commit_sha:
+            manifest["commit_sha"] = commit_sha
+        if resolved_url:
+            manifest["resolved_url"] = resolved_url
+        manifest["content_sha256"] = _content_sha256(dest)
         (dest / MANIFEST_NAME).write_text(
             json.dumps(manifest, indent=2), encoding="utf-8")
     except Exception:

@@ -567,12 +567,21 @@ def skills_install(
         name: str = typer.Option(None, "--name", "-n",
                                  help="Install under this name"),
         force: bool = typer.Option(False, "--force", "-f",
-                                    help="Overwrite an existing install")):
+                                    help="Overwrite an existing install"),
+        trust_remote: bool = typer.Option(False, "--trust-remote",
+                                    help="Trust a remote git source: code "
+                                         "from this repo will run inside "
+                                         "agentkai"),
+        pin: str = typer.Option(None, "--pin",
+                                help="Pin remote install to this commit SHA")):
     """Install a skill into ~/.agentkai/skills/."""
     from .skills import SkillError, install_skill
 
+    if trust_remote or pin:
+        typer.echo("warning: code from this repo will run inside agentkai")
     try:
-        dest = install_skill(source, name=name, force=force)
+        dest = install_skill(source, name=name, force=force,
+                             trust_remote=trust_remote, pin=pin)
     except SkillError as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1)

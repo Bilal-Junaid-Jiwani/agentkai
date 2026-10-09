@@ -3,6 +3,29 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.5.2] - 2026-10-09
+
+### Fixed
+- **Skill installer supply-chain hardening.** Installing a third-party
+  skill previously cloned any git URL with no commit pin or integrity
+  hash, and the skill's `tools.py` then executed unsandboxed inside the
+  agentkai process on load — so a tampered or swapped repo could run
+  arbitrary code. Installs now record `commit_sha` (git installs) and a
+  `content_sha256` (SHA-256 over sorted relative paths + file bytes,
+  excluding `manifest.json`) in `manifest.json`; `SkillLoader.load()`
+  recomputes the hash for `source == "user"` skills and raises
+  `SkillError` on drift *before* `tools.py` executes. Remote/git
+  installs additionally require explicit trust (`install_skill(...,
+  trust_remote=True)`, CLI `--trust-remote`) with the resolved URL
+  shown, and support `--pin <commit>` to pin a clone to a commit.
+  Local-directory installs are unchanged; bundled skills are
+  unaffected. Skills without a manifest (manually copied dirs) keep
+  loading as before. No sandbox is introduced — this closes the
+  silent-tamper hole, not the trust decision itself. Four new tests in
+  `tests/test_skills.py` cover the recorded hash, drift refusal
+  (tampered module-level code never executes), the trust gate, and pin
+  mismatch cleanup.
+
 ## [0.5.1] - 2026-10-08
 
 ### Fixed

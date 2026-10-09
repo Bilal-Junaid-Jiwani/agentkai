@@ -517,3 +517,79 @@ def test_spotify_missing_token(home_env):
     out = by_name(get_tools({"home": home_env}),
                   "spotify_search").run(query="x")
     assert "SPOTIFY_TOKEN" in out
+
+
+# ---- supply-chain hardening (0.5.2) ---------------------------------------
+
+def test_install_records_content_hash(home_env, tmp_path):
+    src = _make_skill_dir(tmp_path)
+    (src / "tools.py").write_text(
+        "def get_tools(config):\n    return []\n")
+    dest = install_skill(str(src))
+    manifest = json.loads((dest / "manifest.json").read_text())
+    assert manifest["content_sha256"]
+    assert SkillLoader().load("myskill").name == "myskill"
+
+
+def test_load_refuses_drifted_user_skill(home_env, tmp_path):
+    src = _make_skill_dir(tmp_path)
+    sentinel = tmp_path / "pwned.txt"
+    (src / "tools.py").write_text(
+        f"open(r{str(sentinel)!r}, 'w').write('x')\n"
+        "def get_tools(config):\n    return []\n")
+    dest = install_skill(str(src))
+    assert not sentinel.exists()
+    (dest / "tools.py").write_text(
+        f"open(r{str(sentinel)!r}, 'w').write('tampered')\n"
+        "def get_tools(config):\n    return []  # tampered\n")
+    with pytest.raises(SkillError, match="drift"):
+        SkillLoader().load("myskill")
+    assert not sentinel.exists()
+
+
+def test_remote_install_requires_trust(home_env, monkeypatch):
+    import subprocess as _sp
+    calls = []
+
+    def fake_run(*a, **k):  # pragma: no cover - must not run without trust
+        calls.append(a)
+        return _sp.CompletedProcess(a[0], 1, "", "nope")
+
+    monkeypatch.setattr("agentkai.skills.subprocess.run", fake_run)
+    with pytest.raises(SkillError, match="trust"):
+        install_skill("owner/repo")
+    assert calls == []
+    with pytest.raises(SkillError, match="git clone failed"):
+        install_skill("owner/repo", trust_remote=True)
+    assert calls, "clone should be attempted with trust"
+
+
+def test_install_pin_mismatch_fails(home_env, tmp_path, monkeypatch):
+    src = _make_skill_dir(tmp_path)
+    monkeypatch.setattr(
+        "agentkai.skills._git_head_sha", lambda dest: "a" * 40)
+    (src / "tools.py").write_text(
+        "def get_tools(config):\n    return []\n")
+    # Local installs ignore pin; exercise pin via git path by faking clone.
+    import shutil as _sh
+
+    def fake_clone(cmd, capture_output, text, timeout):
+        dest = tmp_path / "unused"  # not used; we copy src below instead
+        return type("P", (), {"returncode": 0, "stderr": ""})()
+
+    # Drive the git branch: local.is_dir() is False for the URL source.
+    orig_run = __import__("subprocess").run
+
+    def fake_run(cmd, capture_output=True, text=True, timeout=120):
+        if cmd[:2] == ["git", "clone"]:
+            _sh.copytree(src, cmd[-1])
+            return type("P", (), {"returncode": 0, "stderr": ""})()
+        return orig_run(cmd, capture_output=capture_output, text=text,
+                        timeout=timeout)
+
+    monkeypatch.setattr("agentkai.skills.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "agentkai.skills._git_head_sha", lambda dest: "b" * 40)
+    with pytest.raises(SkillError, match="pin"):
+        install_skill("owner/repo", trust_remote=True, pin="a" * 40)
+    assert not (home_env / "skills" / "myskill").exists()
