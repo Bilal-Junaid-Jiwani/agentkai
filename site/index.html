@@ -3,11 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>agentkai — Your computer. Your agent.</title>
+  <title>agentkai: Your computer. Your agent.</title>
   <meta name="description" content="agentkai is an open-source personal AI agent that runs on your own computer. Model-agnostic: bring your own key for Claude, Gemini, GPT, GLM, or run fully local with Ollama. Real tools, a real browser, markdown memory, a scheduler, and a local dashboard.">
   <link rel="canonical" href="https://bilal-junaid-jiwani.github.io/agentkai/site/">
   <meta property="og:type" content="website">
-  <meta property="og:title" content="agentkai — Your computer. Your agent.">
+  <meta property="og:title" content="agentkai: Your computer. Your agent.">
   <meta property="og:description" content="An open-source personal AI agent that runs on your own computer. Your models, your tools, your memory.">
   <meta property="og:url" content="https://bilal-junaid-jiwani.github.io/agentkai/site/">
   <meta property="og:image" content="https://bilal-junaid-jiwani.github.io/agentkai/site/assets/img/logo.webp">
@@ -15,7 +15,7 @@
   <link rel="icon" href="assets/img/favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,600;1,700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="assets/css/site.css">
 </head>
 <body>
@@ -25,7 +25,6 @@
     <a class="brand" href="#top" aria-label="agentkai home">
       <img src="assets/img/logo-sm.webp" alt="agentkai mascot" width="32" height="32">
       <span>agentkai</span>
-      <span class="ver-pill">v0.5.2</span>
     </a>
     <button class="nav-toggle" id="navToggle" aria-label="Toggle navigation" aria-expanded="false" aria-controls="navLinks">
       <span></span><span></span><span></span>
@@ -53,12 +52,8 @@
 <section class="hero">
   <div class="hero-glow" aria-hidden="true"></div>
   <div class="wrap hero-inner">
-    <a class="hero-badge reveal" href="https://bilal-junaid-jiwani.github.io/agentkai/changelog.html">
-      <span class="dot"></span> New in v0.5.2 — skill installs are now integrity-checked
-      <span class="arrow">→</span>
-    </a>
     <h1 class="reveal">Your computer.<br>Your <em>agent</em>.</h1>
-    <p class="tagline reveal">agentkai is an open-source personal AI agent that runs entirely on your machine — <strong>your models, your tools, your memory.</strong> No accounts. No cloud. No lock-in.</p>
+    <p class="tagline reveal">An open-source personal AI agent that runs on your own computer. <strong>Your models, your tools, your memory.</strong></p>
 
     <div class="install-chip reveal" id="quickstart">
       <span class="prompt">$</span><code>pip install agentkai</code>
@@ -72,30 +67,16 @@
         View on GitHub
       </a>
     </div>
-    <p class="hero-meta reveal">Python 3.10+ · Apache-2.0 · No account, no telemetry — <a href="https://bilal-junaid-jiwani.github.io/agentkai/privacy.html">privacy by design</a></p>
-
-    <!-- hero visual: terminal + mascot -->
+    <!-- hero visual: the real dashboard + mascot -->
     <div class="hero-visual reveal">
-      <div class="term" role="img" aria-label="Terminal showing an agentkai run: the agent reads files with permission gates and streams an answer">
-        <div class="term-bar">
-          <i></i><i></i><i></i>
-          <span class="term-title">terminal — agentkai run</span>
-          <span class="term-live"><span class="pulse"></span>live</span>
+      <figure class="hero-shot">
+        <div class="shot-frame hero-frame">
+          <img src="assets/img/dashboard-chat.png" alt="The agentkai dashboard: chat with the agent, a model picker, and a fresh-token indicator" width="1280" height="800" fetchpriority="high" decoding="async">
         </div>
-        <div class="term-body">
-          <p class="t-line t-cmd"><span class="t-prompt">$</span> <span id="typedCmd">agentkai run "summarize what's in ~/Documents" --model claude</span><span class="cursor" aria-hidden="true"></span></p>
-          <div id="termOut">
-            <p class="t-line"><span class="t-dim">▸ reading ~/Documents</span> <span class="t-tag t-allow">tool · low risk · allowed</span></p>
-            <p class="t-line"><span class="t-dim">▸ shell: du -sh ~/Documents/*</span> <span class="t-tag t-ask">tool · medium risk · asking…</span></p>
-            <p class="t-line"><span class="t-ok">✓ approved by you</span></p>
-            <p class="t-line t-answer">Here's what needs you today: the lease renewal in <span class="t-hl">contracts/</span> expires Friday, and <span class="t-hl">notes/</span> has two unfinished drafts. Everything else is archived or reference material.</p>
-            <p class="t-line t-dim2">run saved · replay it any time with <span class="t-hl">agentkai runs show</span></p>
-          </div>
-        </div>
-      </div>
+      </figure>
 
       <figure class="yeti-float">
-        <img src="assets/img/yeti-anim.webp" alt="agentkai mascot — a fluffy cream yeti, animated" width="224" height="224" loading="eager" decoding="async">
+        <img src="assets/img/yeti-anim.webp" alt="agentkai mascot: a fluffy cream yeti, animated" width="224" height="224" loading="eager" decoding="async">
         <figcaption>kai · the mascot</figcaption>
       </figure>
 
@@ -110,7 +91,7 @@
 <!-- ============ PROVIDERS ============ -->
 <section class="providers" aria-label="Supported model providers">
   <div class="wrap">
-    <p class="providers-label reveal">Bring your own model — one provider layer, zero lock-in</p>
+    <p class="providers-label reveal">Bring your own model</p>
     <div class="provider-row reveal">
       <span class="provider">Claude</span>
       <span class="provider">Gemini</span>
@@ -125,19 +106,18 @@
 <!-- ============ HOW IT WORKS ============ -->
 <section class="section" id="how">
   <div class="wrap">
-    <p class="eyebrow reveal">How it works</p>
     <h2 class="reveal">Three steps to <em>your</em> agent.</h2>
     <p class="lede reveal">No cloud account, no subscription, no black box. You bring the model; agentkai brings everything else.</p>
     <div class="steps">
       <div class="step reveal">
         <span class="num">01</span>
         <h3>Connect a model</h3>
-        <p>Set one API key — or none. Aliases <code>claude</code>, <code>gemini</code>, <code>gpt</code>, <code>glm</code>, and <code>local</code> resolve through a single LiteLLM layer, with fallbacks when a provider hiccups.</p>
+        <p>Set one API key, or none. Aliases <code>claude</code>, <code>gemini</code>, <code>gpt</code>, <code>glm</code>, and <code>local</code> resolve through a single LiteLLM layer, with fallbacks when a provider hiccups.</p>
       </div>
       <div class="step reveal">
         <span class="num">02</span>
         <h3>Give it tools &amp; memory</h3>
-        <p>A permission-gated shell, a real Chromium browser, an MCP client, 12 bundled skills, and subagents — backed by memory kept as plain markdown files you can read, edit, and version with git.</p>
+        <p>A permission-gated shell, a real Chromium browser, an MCP client, 12 bundled skills, and subagents, backed by memory kept as plain markdown files you can read, edit, and version with git.</p>
       </div>
       <div class="step reveal">
         <span class="num">03</span>
@@ -156,18 +136,22 @@
     <p class="lede reveal">Local-first, honest about limits, and every moving part is inspectable. No black boxes, no rented brain.</p>
 
     <div class="bento">
-      <article class="card card-wide reveal">
+      <article class="card card-full reveal">
         <div class="card-ico">
-          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+          <img src="assets/img/icons/arrows-left-right.svg" alt="" width="22" height="22" aria-hidden="true">
         </div>
         <h3>Your models, your keys</h3>
-        <p>agentkai ships no model of its own — it never could lock you in. Switch per run, per scheduled job, or per chat channel. Keys are yours, never printed, never logged.</p>
-        <p class="card-code"><code>agentkai run "…" --model local</code> <span>fully offline with Ollama</span></p>
+        <p>agentkai ships no model of its own. It never could lock you in. Switch per run, per scheduled job, or per chat channel. Keys are yours, never printed, never logged.</p>
+        <div class="mini">
+          <span><b>claude</b> anthropic/claude-sonnet-4-5 <i>key set</i></span>
+          <span><b>gemini</b> gemini/gemini-2.5-flash <i>key set</i></span>
+          <span><b>local</b> ollama/qwen3:32b <i>offline, no key</i></span>
+        </div>
       </article>
 
       <article class="card reveal">
         <div class="card-ico">
-          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l7 3v5c0 4.55-3 8.27-7 10-4-1.73-7-5.45-7-10V6l7-3Z"/><path d="m9 12 2 2 4-4"/></svg>
+          <img src="assets/img/icons/shield-check.svg" alt="" width="22" height="22" aria-hidden="true">
         </div>
         <h3>Permission-gated tools</h3>
         <p>Every tool call passes a risk-based <b>allow / ask / deny</b> gate, and gets audited. Sending email, posting, or charging money always asks first.</p>
@@ -175,48 +159,54 @@
 
       <article class="card reveal">
         <div class="card-ico">
-          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.9 5.7 3.9 9S14.5 18.4 12 21c-2.5-2.6-3.9-5.7-3.9-9S9.5 5.6 12 3Z"/></svg>
+          <img src="assets/img/icons/globe.svg" alt="" width="22" height="22" aria-hidden="true">
         </div>
         <h3>A real browser</h3>
-        <p>A real Chromium the agent can drive — pages render, scripts run, forms work. Not a text scrape pretending to be a browser.</p>
+        <p>A real Chromium the agent can drive: pages render, scripts run, forms work. Not a text scrape pretending to be a browser.</p>
       </article>
 
       <article class="card reveal">
         <div class="card-ico">
-          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V4a2 2 0 0 0-2-2H6.5A2.5 2.5 0 0 0 4 4.5v15Z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/></svg>
+          <img src="assets/img/icons/book-open.svg" alt="" width="22" height="22" aria-hidden="true">
         </div>
         <h3>Memory you can read</h3>
-        <p>Plain markdown in <code>~/.agentkai/memory/</code> — no vector-store black box. Read it, edit it, commit it to git. Nightly "dreaming" folds the day into durable facts.</p>
+        <p>Plain markdown in <code>~/.agentkai/memory/</code>: no vector-store black box. Read it, edit it, commit it to git. Nightly "dreaming" folds the day into durable facts.</p>
+        <div class="mini">
+          <span><b>MEMORY.md</b> <i>durable facts</i></span>
+          <span><b>SOUL.md</b> <i>agent persona</i></span>
+          <span><b>USER.md</b> <i>about you</i></span>
+          <span><b>2026-10-01.md</b> <i>daily log</i></span>
+        </div>
       </article>
 
       <article class="card reveal">
         <div class="card-ico">
-          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+          <img src="assets/img/icons/clock.svg" alt="" width="22" height="22" aria-hidden="true">
         </div>
         <h3>Works while you sleep</h3>
-        <p>Cron jobs, one-shot timers, and a heartbeat check-in, stored in SQLite so they survive restarts. Unattended jobs can never run high-risk tools — denied, not asked.</p>
+        <p>Cron jobs, one-shot timers, and a heartbeat check-in, stored in SQLite so they survive restarts. Unattended jobs can never run high-risk tools. They are denied, not asked.</p>
       </article>
 
-      <article class="card card-wide reveal">
+      <article class="card card-full reveal">
         <div class="card-ico">
-          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5Z"/></svg>
+          <img src="assets/img/icons/chat-circle.svg" alt="" width="22" height="22" aria-hidden="true">
         </div>
         <h3>Talk from anywhere</h3>
-        <p>One agent behind every surface: terminal, local dashboard, Telegram, Discord, and built-in WebChat — plus an experimental WhatsApp bridge. Owner approvals (<code>APPROVE</code> / <code>DENY</code>) work from whichever chat you're in.</p>
-        <p class="card-code"><code>agentkai gateway</code> <span>one daemon, every channel</span></p>
+        <p>One agent behind every surface: terminal, local dashboard, Telegram, Discord, and built-in WebChat, plus an experimental WhatsApp bridge. Owner approvals (<code>APPROVE</code> / <code>DENY</code>) work from whichever chat you're in.</p>
+        <div class="chips"><span>Telegram</span><span>Discord</span><span>WebChat</span><span>WhatsApp <i>experimental</i></span></div>
       </article>
 
       <article class="card reveal">
         <div class="card-ico">
-          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="m7 9 3 3-3 3M12 15h5"/></svg>
+          <img src="assets/img/icons/terminal-window.svg" alt="" width="22" height="22" aria-hidden="true">
         </div>
         <h3>Subagents &amp; MCP</h3>
-        <p>Fan work out to subagents, and plug in any MCP server (stdio or SSE) — new tools join the same permission gate as the built-ins.</p>
+        <p>Fan work out to subagents, and plug in any MCP server (stdio or SSE). New tools join the same permission gate as the built-ins.</p>
       </article>
 
       <article class="card reveal">
         <div class="card-ico">
-          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4"/></svg>
+          <img src="assets/img/icons/microphone.svg" alt="" width="22" height="22" aria-hidden="true">
         </div>
         <h3>Voice &amp; media</h3>
         <p>Speech-to-text with faster-whisper (offline) or OpenAI, text-to-speech, and image generation via OpenAI or a local Stable Diffusion server. Nothing configured? You get an honest error, never a fake.</p>
@@ -234,14 +224,14 @@
         <h3>Bring a key. Or don't.</h3>
         <p>Hosted models take one environment variable each. The <code>local</code> alias needs nothing at all: install Ollama, pull a model, and agentkai runs with no key, no network, no cost.</p>
         <ul>
-          <li><code>agentkai models</code> shows each alias and whether its key is set — never the key itself</li>
+          <li><code>agentkai models</code> shows each alias and whether its key is set, never the key itself</li>
           <li>Fallback chains ride through a flaky provider instead of failing the run</li>
           <li>100+ models through one LiteLLM layer</li>
         </ul>
       </div>
       <div class="fvisual">
         <div class="mock">
-          <div class="mock-bar"><i></i><i></i><i></i><span>terminal</span></div>
+          <div class="mock-bar"><span>terminal</span></div>
 <pre><span class="c"># bring your own key</span>
 export ANTHROPIC_API_KEY=sk-ant-…
 <span class="a">agentkai</span> models
@@ -254,20 +244,20 @@ export ANTHROPIC_API_KEY=sk-ant-…
       </div>
     </div>
 
-    <div class="frow flip reveal">
+    <div class="frow frow-stack reveal">
       <div class="ftext">
         <p class="frow-eyebrow">Memory</p>
-        <h3>It actually remembers — in plain text</h3>
+        <h3>It actually remembers, in plain text</h3>
         <p>Memory is markdown on your disk: durable facts, a persona file, daily logs, and pages for the people in your life. Keyword search, no embeddings service, nothing you can't open in a text editor.</p>
         <ul>
-          <li><code>SOUL.md</code> + <code>USER.md</code> — who the agent is, who you are</li>
+          <li><code>SOUL.md</code> + <code>USER.md</code>: who the agent is, who you are</li>
           <li>Daily logs and long-term <code>MEMORY.md</code>, consolidated nightly</li>
-          <li>Back it up, diff it, or delete it — it's just files</li>
+          <li>Back it up, diff it, or delete it. It's just files.</li>
         </ul>
       </div>
       <div class="fvisual">
         <div class="mock">
-          <div class="mock-bar"><i></i><i></i><i></i><span>~/.agentkai/memory</span></div>
+          <div class="mock-bar"><span>~/.agentkai/memory</span></div>
 <pre>memory/
 <span class="a">├── MEMORY.md</span>        <span class="c"># durable facts</span>
 <span class="a">├── SOUL.md</span>          <span class="c"># agent persona</span>
@@ -276,7 +266,7 @@ export ANTHROPIC_API_KEY=sk-ant-…
 <span class="a">└── people/</span>
 <span class="a">    ├── INDEX.md</span>
     └── example-person.md
-<span class="c"># git init &amp;&amp; git commit — your call</span></pre>
+<span class="c"># git init &amp;&amp; git commit (your call)</span></pre>
         </div>
       </div>
     </div>
@@ -285,16 +275,16 @@ export ANTHROPIC_API_KEY=sk-ant-…
       <div class="ftext">
         <p class="frow-eyebrow">Scheduler</p>
         <h3>Set it. Sleep. Wake up briefed.</h3>
-        <p>Recurring cron jobs, one-shot reminders, and a heartbeat that checks in on its own. Jobs live in SQLite, are managed from the CLI or the dashboard, and run under the same permission rules — with high-risk tools denied outright while you're away.</p>
+        <p>Recurring cron jobs, one-shot reminders, and a heartbeat that checks in on its own. Jobs live in SQLite, are managed from the CLI or the dashboard, and run under the same permission rules, with high-risk tools denied outright while you're away.</p>
         <ul>
           <li><code>scheduler add</code> / <code>list</code> / <code>run-once</code> / <code>remove</code></li>
-          <li>Every run is logged — replay it later with <code>agentkai runs show</code></li>
+          <li>Every run is logged. Replay it later with <code>agentkai runs show</code></li>
           <li><code>agentkai doctor</code> verifies the whole setup in one command</li>
         </ul>
       </div>
       <div class="fvisual">
         <div class="mock">
-          <div class="mock-bar"><i></i><i></i><i></i><span>scheduler</span></div>
+          <div class="mock-bar"><span>scheduler</span></div>
 <pre><span class="c"># every weekday at 7:00</span>
 <span class="a">agentkai</span> scheduler add morning-brief \
   --schedule "0 7 * * 1-5" \
@@ -314,29 +304,22 @@ export ANTHROPIC_API_KEY=sk-ant-…
 <!-- ============ DASHBOARD ============ -->
 <section class="section section-tight" id="dashboard">
   <div class="wrap">
-    <p class="eyebrow reveal">Dashboard</p>
     <h2 class="reveal">Prefer a UI? <em>It's already on your machine.</em></h2>
     <p class="lede reveal"><code>agentkai dashboard</code> launches a local web app: chat with streaming tool calls, browse and edit memory, inspect every past run, and manage scheduled jobs. Same agent, same tools underneath.</p>
 
     <div class="dash-shots reveal">
       <figure class="shot">
         <div class="shot-frame">
-          <img src="assets/img/dashboard-chat.png" alt="agentkai dashboard — chat view with model picker and streaming replies" width="1280" height="800" loading="lazy">
+          <img src="assets/img/dashboard-scheduler.png" alt="The agentkai dashboard, Scheduler view: a job creation form and the list of scheduled jobs" width="1280" height="800" loading="lazy">
         </div>
-        <figcaption><b>Chat</b> — replies stream in live, tool calls shown inline.</figcaption>
-      </figure>
-      <figure class="shot">
-        <div class="shot-frame">
-          <img src="assets/img/dashboard-scheduler.png" alt="agentkai dashboard — scheduler view with job creation form and job list" width="1280" height="800" loading="lazy">
-        </div>
-        <figcaption><b>Scheduler</b> — create jobs, run them now, inspect history.</figcaption>
+        <figcaption><b>Scheduler.</b> Create jobs, run them now, inspect history. Chat, memory editing, and run timelines live in the same local app.</figcaption>
       </figure>
     </div>
 
     <div class="dash-points reveal">
-      <div class="dash-point"><span class="dp-ico"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 11 9-8 9 8"/><path d="M5 9.5V21h14V9.5"/></svg></span><p><b>Localhost only.</b> Binds 127.0.0.1 — never exposed to your network.</p></div>
-      <div class="dash-point"><span class="dp-ico"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="15" r="4.5"/><path d="m11.2 11.8 8.3-8.3M17 5l3 3M14.5 7.5l2.5 2.5"/></svg></span><p><b>Fresh token every launch.</b> No password to remember or leak.</p></div>
-      <div class="dash-point"><span class="dp-ico"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m5.5 5.5 13 13"/></svg></span><p><b>Zero third-party resources.</b> The whole UI ships with agentkai and works fully offline.</p></div>
+      <div class="dash-point"><span class="dp-ico"><img src="assets/img/icons/house.svg" alt="" width="19" height="19" aria-hidden="true"></span><p><b>Localhost only.</b> Binds 127.0.0.1: never exposed to your network.</p></div>
+      <div class="dash-point"><span class="dp-ico"><img src="assets/img/icons/key.svg" alt="" width="19" height="19" aria-hidden="true"></span><p><b>Fresh token every launch.</b> No password to remember or leak.</p></div>
+      <div class="dash-point"><span class="dp-ico"><img src="assets/img/icons/wifi-slash.svg" alt="" width="19" height="19" aria-hidden="true"></span><p><b>Zero third-party resources.</b> The whole UI ships with agentkai and works fully offline.</p></div>
     </div>
   </div>
 </section>
@@ -344,9 +327,8 @@ export ANTHROPIC_API_KEY=sk-ant-…
 <!-- ============ CLI ============ -->
 <section class="section section-tight" id="cli">
   <div class="wrap">
-    <p class="eyebrow reveal">CLI</p>
     <h2 class="reveal">One command, <em>everything</em>.</h2>
-    <p class="lede reveal">Twelve commands cover the whole agent. These examples are real — install agentkai and try them.</p>
+    <p class="lede reveal">Twelve commands cover the whole agent. These examples are real. Install agentkai and try them.</p>
 
     <div class="cli-card reveal">
       <div class="cli-tabs" role="tablist" aria-label="CLI examples">
@@ -358,7 +340,7 @@ export ANTHROPIC_API_KEY=sk-ant-…
         <button class="cli-tab" role="tab" aria-selected="false" data-cli="skills" type="button">skills</button>
       </div>
       <div class="cli-body">
-        <div class="mock-bar"><i></i><i></i><i></i><span>terminal</span></div>
+        <div class="mock-bar"><span>terminal</span></div>
 <pre id="cliPre"><span class="c"># run one agent task, streaming</span>
 <span class="a">agentkai</span> run "list the files in my home directory and summarize what this machine is for"
 <span class="c"># → the answer streams as the model thinks; medium/high-risk tools ask first</span>
@@ -386,25 +368,24 @@ export ANTHROPIC_API_KEY=sk-ant-…
 <!-- ============ SKILLS ============ -->
 <section class="section section-tight" id="skills">
   <div class="wrap">
-    <p class="eyebrow reveal">Skills</p>
     <h2 class="reveal">Twelve skills, <em>bundled</em>.</h2>
-    <p class="lede reveal">Skills are reusable playbooks — a <code>SKILL.md</code> plus optional tools — that teach the agent a job once. Write your own the same way and drop them in.</p>
+    <p class="lede reveal">Skills are reusable playbooks, a <code>SKILL.md</code> plus optional tools, that teach the agent a job once. Write your own the same way and drop them in.</p>
 
     <div class="skills-grid">
-      <article class="skill reveal"><h3>github</h3><p>Repos, issues, pull requests, and Actions workflow runs.</p></article>
-      <article class="skill reveal"><h3>gmail</h3><p>Search, read, draft, and send email through your account.</p></article>
-      <article class="skill reveal"><h3>google_calendar</h3><p>Read your agenda; create, update, and delete events.</p></article>
-      <article class="skill reveal"><h3>health</h3><p>Steps, sleep, and workout trends from exported HealthKit / Health Connect files.</p></article>
-      <article class="skill reveal"><h3>image_search</h3><p>Find images by keyword, with source pages and license info.</p></article>
-      <article class="skill reveal"><h3>media</h3><p>Generate and edit images via OpenAI or a local Stable Diffusion server.</p></article>
-      <article class="skill reveal"><h3>payments</h3><p>Stripe payment intents — high-risk, so every charge needs your explicit approval.</p></article>
-      <article class="skill reveal"><h3>places</h3><p>Restaurants, shops, hours, and contact details via OpenStreetMap.</p></article>
-      <article class="skill reveal"><h3>shopping</h3><p>Product search with images and links; groceries built in via OpenFoodFacts.</p></article>
-      <article class="skill reveal"><h3>spotify</h3><p>Search Spotify, see what's playing, control playback.</p></article>
-      <article class="skill reveal"><h3>travel</h3><p>Live flight tracking (OpenSky, no key) plus booking providers you plug in.</p></article>
-      <article class="skill reveal"><h3>voice</h3><p>Transcribe voice notes and recordings; speak text aloud.</p></article>
+      <article class="skill"><h3>github</h3><p>Repos, issues, pull requests, and Actions workflow runs.</p></article>
+      <article class="skill"><h3>gmail</h3><p>Search, read, draft, and send email through your account.</p></article>
+      <article class="skill"><h3>google_calendar</h3><p>Read your agenda; create, update, and delete events.</p></article>
+      <article class="skill"><h3>health</h3><p>Steps, sleep, and workout trends from exported HealthKit / Health Connect files.</p></article>
+      <article class="skill"><h3>image_search</h3><p>Find images by keyword, with source pages and license info.</p></article>
+      <article class="skill"><h3>media</h3><p>Generate and edit images via OpenAI or a local Stable Diffusion server.</p></article>
+      <article class="skill"><h3>payments</h3><p>Stripe payment intents. High-risk, so every charge needs your explicit approval.</p></article>
+      <article class="skill"><h3>places</h3><p>Restaurants, shops, hours, and contact details via OpenStreetMap.</p></article>
+      <article class="skill"><h3>shopping</h3><p>Product search with images and links; groceries built in via OpenFoodFacts.</p></article>
+      <article class="skill"><h3>spotify</h3><p>Search Spotify, see what's playing, control playback.</p></article>
+      <article class="skill"><h3>travel</h3><p>Live flight tracking (OpenSky, no key) plus booking providers you plug in.</p></article>
+      <article class="skill"><h3>voice</h3><p>Transcribe voice notes and recordings; speak text aloud.</p></article>
     </div>
-    <p class="skills-note reveal">Skills that talk to a service use <b>your</b> account and key for it — nothing is shared. Every skill install is integrity-checked: <code>agentkai skills install</code> records a content hash that's verified before the skill's code ever runs. <a href="https://bilal-junaid-jiwani.github.io/agentkai/skills.html">How skills work →</a></p>
+    <p class="skills-note reveal">Skills that talk to a service use <b>your</b> account and key for it. Nothing is shared. Every skill install is integrity-checked: <code>agentkai skills install</code> records a content hash that's verified before the skill's code ever runs. <a href="https://bilal-junaid-jiwani.github.io/agentkai/skills.html">How skills work</a></p>
   </div>
 </section>
 
@@ -413,15 +394,14 @@ export ANTHROPIC_API_KEY=sk-ant-…
   <div class="wrap">
     <div class="safety-card reveal">
       <div class="safety-text">
-        <p class="eyebrow">Safety, by default</p>
         <h2>An agent with <em>brakes</em>.</h2>
         <p>Powerful tools are only useful if you can trust them unattended. agentkai gates every action by risk, audits what happened, and keeps your keys and data on your machine.</p>
         <a class="btn btn-ghost" href="https://bilal-junaid-jiwani.github.io/agentkai/privacy.html">Read the privacy model</a>
       </div>
       <div class="gate-grid">
-        <div class="gate gate-allow"><span class="gate-label">allow</span><p>Low-risk reads and lookups run freely — listing files, searching memory, checking the calendar.</p></div>
+        <div class="gate gate-allow"><span class="gate-label">allow</span><p>Low-risk reads and lookups run freely: listing files, searching memory, checking the calendar.</p></div>
         <div class="gate gate-ask"><span class="gate-label">ask</span><p>Medium and high risk stops and asks: shell commands, sending email, posting, charging money.</p></div>
-        <div class="gate gate-deny"><span class="gate-label">deny</span><p>Blocklisted paths and high-risk tools in unattended jobs are refused outright — no prompt to sleep through.</p></div>
+        <div class="gate gate-deny"><span class="gate-label">deny</span><p>Blocklisted paths and high-risk tools in unattended jobs are refused outright, with no prompt to sleep through.</p></div>
       </div>
     </div>
   </div>
@@ -436,11 +416,11 @@ export ANTHROPIC_API_KEY=sk-ant-…
     <div class="faq reveal">
       <div class="faq-item">
         <button class="faq-q" type="button" aria-expanded="false">Do I need an API key?<span class="faq-x" aria-hidden="true">+</span></button>
-        <div class="faq-a"><p>No. Install <a href="https://ollama.com" rel="noopener">Ollama</a>, pull a model (<code>ollama pull qwen3:32b</code>), and run with <code>--model local</code> — no key, no network, no cost. Hosted models (Claude, Gemini, GPT, GLM) use your own key, set as an environment variable.</p></div>
+        <div class="faq-a"><p>No. Install <a href="https://ollama.com" rel="noopener">Ollama</a>, pull a model (<code>ollama pull qwen3:32b</code>), and run with <code>--model local</code>. No key, no network, no cost. Hosted models (Claude, Gemini, GPT, GLM) use your own key, set as an environment variable.</p></div>
       </div>
       <div class="faq-item">
         <button class="faq-q" type="button" aria-expanded="false">Where does my data go?<span class="faq-x" aria-hidden="true">+</span></button>
-        <div class="faq-a"><p>Nowhere by default. The agent, memory, scheduler, and dashboard all live in <code>~/.agentkai/</code> on your computer — no account, no telemetry, no analytics. The only things that leave are what you choose: prompts to your hosted model provider, and API calls for skills you configured. With a local model, nothing leaves the box.</p></div>
+        <div class="faq-a"><p>Nowhere by default. The agent, memory, scheduler, and dashboard all live in <code>~/.agentkai/</code> on your computer. No account, no telemetry, no analytics. The only things that leave are what you choose: prompts to your hosted model provider, and API calls for skills you configured. With a local model, nothing leaves the box.</p></div>
       </div>
       <div class="faq-item">
         <button class="faq-q" type="button" aria-expanded="false">Which models can I use?<span class="faq-x" aria-hidden="true">+</span></button>
@@ -448,19 +428,19 @@ export ANTHROPIC_API_KEY=sk-ant-…
       </div>
       <div class="faq-item">
         <button class="faq-q" type="button" aria-expanded="false">What does it cost?<span class="faq-x" aria-hidden="true">+</span></button>
-        <div class="faq-a"><p>agentkai is free and open source (Apache-2.0). If you pick a hosted model, you pay that provider directly at their rates — agentkai adds no markup and holds no keys of its own. Local models cost nothing but electricity.</p></div>
+        <div class="faq-a"><p>agentkai is free and open source (Apache-2.0). If you pick a hosted model, you pay that provider directly at their rates. agentkai adds no markup and holds no keys of its own. Local models cost nothing but electricity.</p></div>
       </div>
       <div class="faq-item">
         <button class="faq-q" type="button" aria-expanded="false">Can I talk to it from my phone?<span class="faq-x" aria-hidden="true">+</span></button>
-        <div class="faq-a"><p>Yes — the messaging gateway connects Telegram, Discord, and a built-in WebChat to the same agent, and a WhatsApp bridge is available as an experimental option. The web dashboard itself stays localhost-only by design; for phone access, pair a device or use a chat channel.</p></div>
+        <div class="faq-a"><p>Yes. The messaging gateway connects Telegram, Discord, and a built-in WebChat to the same agent, and a WhatsApp bridge is available as an experimental option. The web dashboard itself stays localhost-only by design; for phone access, pair a device or use a chat channel.</p></div>
       </div>
       <div class="faq-item">
         <button class="faq-q" type="button" aria-expanded="false">What do I need to run it?<span class="faq-x" aria-hidden="true">+</span></button>
-        <div class="faq-a"><p>Python 3.10 or newer and pip: <code>pip install agentkai</code>. Run <code>agentkai doctor</code> afterwards — it checks your config, provider keys, scheduler database, memory, tools, and dashboard assets, and tells you exactly what's missing.</p></div>
+        <div class="faq-a"><p>Python 3.10 or newer and pip: <code>pip install agentkai</code>. Run <code>agentkai doctor</code> afterwards. It checks your config, provider keys, scheduler database, memory, tools, and dashboard assets, and tells you exactly what's missing.</p></div>
       </div>
     </div>
 
-    <p class="honest-note reveal">Honest scope: agentkai is early-stage software, developed in the open. Core flows — agent runs, tools, memory, scheduler, dashboard, channels — are implemented and tested. Areas marked <b>experimental</b> in the docs (like the WhatsApp bridge) are real code with real limits; they're labeled, not hidden.</p>
+    <p class="honest-note reveal">Honest scope: agentkai is early-stage software, developed in the open. Core flows (agent runs, tools, memory, scheduler, dashboard, channels) are implemented and tested. Areas marked <b>experimental</b> in the docs (like the WhatsApp bridge) are real code with real limits; they're labeled, not hidden.</p>
   </div>
 </section>
 
@@ -475,7 +455,7 @@ export ANTHROPIC_API_KEY=sk-ant-…
       <button class="copy-btn" data-copy="pip install agentkai" type="button" aria-label="Copy install command">Copy</button>
     </div>
     <div class="hero-ctas">
-      <a class="btn btn-filled" href="https://bilal-junaid-jiwani.github.io/agentkai/quickstart.html">Get started in 60 seconds</a>
+      <a class="btn btn-filled" href="https://bilal-junaid-jiwani.github.io/agentkai/quickstart.html">Read the quickstart</a>
       <a class="btn btn-ghost" href="https://pypi.org/project/agentkai/" rel="noopener">View on PyPI</a>
     </div>
   </div>
@@ -490,7 +470,6 @@ export ANTHROPIC_API_KEY=sk-ant-…
         <a class="brand" href="#top">
           <img src="assets/img/logo-sm.webp" alt="agentkai mascot" width="30" height="30">
           <span>agentkai</span>
-          <span class="ver-pill">v0.5.2</span>
         </a>
         <p>An open-source personal AI agent that runs on your own computer. Your models, your tools, your memory.</p>
         <p class="foot-install"><code>$ pip install agentkai</code></p>
@@ -521,8 +500,8 @@ export ANTHROPIC_API_KEY=sk-ant-…
       </div>
     </div>
     <div class="foot-base">
-      <span>agentkai — your computer, your agent.</span>
-      <span>Apache-2.0 · Python 3.10+ · built in the open</span>
+      <span>agentkai: your computer, your agent.</span>
+      <span>Apache-2.0, Python 3.10+, built in the open</span>
     </div>
   </div>
 </footer>
