@@ -3,6 +3,26 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.5.3] - 2026-10-10
+
+### Fixed
+- **Skill manifest verification now fails closed.** The 0.5.2 integrity
+  check silently skipped verification whenever an installed user skill's
+  `manifest.json` was unreadable, invalid JSON, or missing its
+  `content_sha256` — so corrupting the manifest switched the drift
+  check off and let tampered `tools.py` code execute (verified with a
+  repro: a marker-dropping `tools.py` ran despite a destroyed
+  manifest). `SkillLoader.load()` now refuses such skills with a
+  `SkillError` before any skill code runs, and `agentkai skills list`
+  flags the broken manifest instead of showing the skill as healthy.
+  Skills with no manifest at all (manually copied directories) keep
+  loading as before. Note: skills installed by agentkai ≤ 0.5.1 carry
+  a manifest without an integrity hash and must be reinstalled once
+  (`agentkai skills install <source> --force`) to stamp one. Five new
+  tests in `tests/test_skills.py` cover the corrupt, hash-less, and
+  non-object manifest refusals (tampered code never executes), the
+  manifest-less manual-copy path, and the `skills list` flagging.
+
 ## [0.5.2] - 2026-10-09
 
 ### Fixed

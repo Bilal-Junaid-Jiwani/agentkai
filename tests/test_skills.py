@@ -593,3 +593,59 @@ def test_install_pin_mismatch_fails(home_env, tmp_path, monkeypatch):
     with pytest.raises(SkillError, match="pin"):
         install_skill("owner/repo", trust_remote=True, pin="a" * 40)
     assert not (home_env / "skills" / "myskill").exists()
+
+
+# ---- manifest fail-closed (0.5.3) -------------------------------------------
+
+def _install_marker_skill(home_env, tmp_path):
+    """Install a skill whose tools.py drops a sentinel file on import."""
+    src = _make_skill_dir(tmp_path)
+    sentinel = tmp_path / "pwned.txt"
+    (src / "tools.py").write_text(
+        f"open(r{str(sentinel)!r}, 'w').write('x')\n"
+        "def get_tools(config):\n    return []\n")
+    dest = install_skill(str(src))
+    assert not sentinel.exists()
+    return dest, sentinel
+
+
+def test_load_refuses_corrupt_manifest(home_env, tmp_path):
+    dest, sentinel = _install_marker_skill(home_env, tmp_path)
+    (dest / "manifest.json").write_text("{ not json !!")
+    with pytest.raises(SkillError, match="manifest is unreadable"):
+        SkillLoader().load("myskill")
+    assert not sentinel.exists()
+
+
+def test_load_refuses_manifest_without_hash(home_env, tmp_path):
+    dest, sentinel = _install_marker_skill(home_env, tmp_path)
+    manifest = json.loads((dest / "manifest.json").read_text())
+    del manifest["content_sha256"]  # shape stamped by agentkai <= 0.5.1
+    (dest / "manifest.json").write_text(json.dumps(manifest))
+    with pytest.raises(SkillError, match="no content_sha256"):
+        SkillLoader().load("myskill")
+    assert not sentinel.exists()
+
+
+def test_load_refuses_non_object_manifest(home_env, tmp_path):
+    dest, sentinel = _install_marker_skill(home_env, tmp_path)
+    (dest / "manifest.json").write_text('["not", "an", "object"]')
+    with pytest.raises(SkillError, match="not a JSON object"):
+        SkillLoader().load("myskill")
+    assert not sentinel.exists()
+
+
+def test_load_allows_skill_without_manifest(home_env, tmp_path):
+    # Manually copied dirs (no manifest at all) keep loading as before.
+    dest, sentinel = _install_marker_skill(home_env, tmp_path)
+    (dest / "manifest.json").unlink()
+    assert SkillLoader().load("myskill").name == "myskill"
+    assert sentinel.exists()
+
+
+def test_list_skills_flags_unverifiable_manifest(home_env, tmp_path):
+    dest, _sentinel = _install_marker_skill(home_env, tmp_path)
+    (dest / "manifest.json").write_text("{ not json !!")
+    rows = {r["name"]: r for r in list_skills()}
+    assert "error" in rows["myskill"]
+    assert "manifest" in rows["myskill"]["error"]

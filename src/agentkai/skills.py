@@ -305,16 +305,36 @@ def _git_head_sha(dest: Path) -> str | None:
 
 
 def _verify_user_skill(path: Path) -> None:
+    """Fail-closed integrity check for installed user skills.
+
+    No manifest at all (manually copied dir) -> allowed, as before.
+    A manifest that exists but cannot be trusted — unreadable, invalid
+    JSON, not an object, or missing its content hash (stamped by
+    agentkai <= 0.5.1 installers) — refuses the load: a tampered
+    manifest must never silently switch verification off.
+    """
     mf = path / MANIFEST_NAME
     if not mf.exists():
         return
     try:
         manifest = json.loads(mf.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SkillError(
+            f"{path}: skill manifest is unreadable ({exc}); "
+            f"refusing to load unverified skill code — "
+            f"reinstall the skill to re-stamp its manifest")
+    if not isinstance(manifest, dict):
+        raise SkillError(
+            f"{path}: skill manifest is not a JSON object; "
+            f"refusing to load unverified skill code — "
+            f"reinstall the skill to re-stamp its manifest")
     expected = manifest.get("content_sha256")
     if not expected:
-        return
+        raise SkillError(
+            f"{path}: skill manifest has no content_sha256 "
+            f"(installed before the 0.5.2 integrity stamp?); "
+            f"refusing to load unverified skill code — "
+            f"reinstall the skill to stamp an integrity hash")
     got = _content_sha256(path)
     if got != expected:
         raise SkillError(
@@ -426,12 +446,29 @@ def list_skills() -> list[dict]:
             out.append({"name": name, "source": source, "error": str(exc)})
             continue
         manifest: dict[str, Any] = {}
+        manifest_error: str | None = None
         mf = path / MANIFEST_NAME
         if mf.exists():
             try:
                 manifest = json.loads(mf.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                pass
+            except (OSError, json.JSONDecodeError) as exc:
+                manifest_error = (
+                    f"skill manifest is unreadable ({exc}); "
+                    f"reinstall the skill to re-stamp its manifest")
+            else:
+                if not isinstance(manifest, dict):
+                    manifest = {}
+                    manifest_error = (
+                        "skill manifest is not a JSON object; "
+                        "reinstall the skill to re-stamp its manifest")
+                elif source == "user" and not manifest.get("content_sha256"):
+                    manifest_error = (
+                        "skill manifest has no content_sha256; "
+                        "reinstall the skill to stamp an integrity hash")
+        if manifest_error:
+            out.append({"name": name, "source": source,
+                        "error": manifest_error})
+            continue
         out.append({"name": meta["name"], "description": meta["description"],
                     "version": meta["version"], "source": source,
                     "tools": _count_tools_safely(path),

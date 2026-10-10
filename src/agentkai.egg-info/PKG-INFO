@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: agentkai
-Version: 0.5.0
+Version: 0.5.3
 Summary: Open-source personal AI agent — model-agnostic, with tools, memory, scheduler and a local dashboard
 License: Apache-2.0
 Requires-Python: >=3.10
