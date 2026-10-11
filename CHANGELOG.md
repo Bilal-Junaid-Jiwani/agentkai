@@ -3,6 +3,26 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.5.4] - 2026-10-11
+
+### Fixed
+- **Media `out_path` can no longer escape the media directory.** The
+  `generate_image`, `generate_video`, and `edit_image` tools joined a
+  relative `out_path` to `~/.agentkai/media/` but never checked the
+  result, so a path like `../../pwned.png` wrote the generated file
+  *outside* the media dir (verified with a repro: a stub provider wrote
+  three files outside the dir). The traversal guard in `generate_image`
+  was dead code — after joining, the path was always absolute, so the
+  check could never fire — and the other two functions had no guard at
+  all, quietly bypassing the filesystem sandbox the file/shell tools
+  enforce. All three now resolve the path through one helper that
+  collapses `..` segments and symlinks and refuses anything landing
+  outside the media dir; relative subdirectories (e.g.
+  `campaigns/hero.png`) still work and get their parents created, and
+  absolute paths are accepted only inside the media dir. Seven new tests
+  in `tests/test_media.py` cover `../` traversal, absolute-path escape,
+  symlink smuggling, and the legitimate cases.
+
 ## [0.5.3] - 2026-10-10
 
 ### Fixed

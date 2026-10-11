@@ -47,6 +47,102 @@ def _cfg(home):
     return {"home": str(home)}
 
 
+# ---- out_path confinement (media dir is not a sandbox escape) -------------------
+
+class _StubWriter(media.ImageProvider):
+    """Fake provider that just writes bytes where told."""
+    name = "stubwriter"
+
+    def generate(self, prompt, width, height, out_path):
+        out_path.write_bytes(b"IMG")
+        return MediaResult(str(out_path), self.name, width, height, 3)
+
+    def edit(self, image_path, mask_path, prompt, width, height, out_path):
+        out_path.write_bytes(b"EDIT")
+        return MediaResult(str(out_path), self.name, width, height, 4)
+
+
+class _StubVideoWriter(VideoProvider):
+    name = "stubvideowriter"
+
+    def generate(self, prompt, duration, out_path):
+        out_path.write_bytes(b"VID")
+        return MediaResult(str(out_path), self.name, 0, 0, 3)
+
+
+def test_generate_image_refuses_traversal_out_path(home):
+    res = generate_image("x", out_path="../../escape.png",
+                         config=_cfg(home), provider=_StubWriter())
+    assert isinstance(res, str) and res.startswith("ERROR:")
+    assert "escapes the media dir" in res
+    assert not list(home.glob("escape.png"))
+    assert not list(home.rglob("escape.png"))
+
+
+def test_generate_video_refuses_traversal_out_path(home):
+    saved = dict(media._VIDEO_PROVIDERS)
+    try:
+        register_video_provider(_StubVideoWriter())
+        res = generate_video("x", duration=2, out_path="../../escape.mp4",
+                             config=_cfg(home))
+        assert isinstance(res, str) and res.startswith("ERROR:")
+        assert "escapes the media dir" in res
+        assert not list(home.rglob("escape.mp4"))
+    finally:
+        media._VIDEO_PROVIDERS.clear()
+        media._VIDEO_PROVIDERS.update(saved)
+
+
+def test_edit_image_refuses_traversal_out_path(home):
+    src = home / "src.png"
+    src.write_bytes(PNG_BYTES)
+    res = edit_image(str(src), "blue", out_path="../../escape.png",
+                     config=_cfg(home), provider=_StubWriter())
+    assert isinstance(res, str) and res.startswith("ERROR:")
+    assert "escapes the media dir" in res
+    assert not list(home.rglob("escape.png"))
+
+
+def test_absolute_out_path_outside_media_dir_refused(home):
+    outside = home / "elsewhere.png"
+    res = generate_image("x", out_path=str(outside),
+                         config=_cfg(home), provider=_StubWriter())
+    assert isinstance(res, str) and res.startswith("ERROR:")
+    assert not outside.exists()
+
+
+def test_relative_subdir_out_path_stays_in_media_dir(home):
+    prov = _StubWriter()
+    res = generate_image("x", out_path="nested/out.png",
+                         config=_cfg(home), provider=prov)
+    assert not isinstance(res, str)
+    p = Path(res["path"])
+    assert p.parent == home / "media" / "nested"
+    assert p.read_bytes() == b"IMG"
+
+
+def test_absolute_out_path_inside_media_dir_allowed(home):
+    prov = _StubWriter()
+    inside = home / "media" / "ok.png"
+    res = generate_image("x", out_path=str(inside),
+                         config=_cfg(home), provider=prov)
+    assert not isinstance(res, str)
+    assert Path(res["path"]) == inside
+    assert inside.read_bytes() == b"IMG"
+
+
+def test_symlink_traversal_out_path_refused(home):
+    # A symlink inside the media dir pointing outside must not smuggle
+    # the write out either.
+    media.media_dir(home).mkdir(parents=True, exist_ok=True)
+    link = home / "media" / "link"
+    link.symlink_to(home, target_is_directory=True)
+    res = generate_image("x", out_path="link/escape.png",
+                         config=_cfg(home), provider=_StubWriter())
+    assert isinstance(res, str) and res.startswith("ERROR:")
+    assert not (home / "escape.png").exists()
+
+
 # ---- provider selection -------------------------------------------------------
 
 def test_select_explicit_openai_without_key_errors(home):

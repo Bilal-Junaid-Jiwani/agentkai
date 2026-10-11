@@ -420,6 +420,30 @@ def select_video_provider(config: dict | None = None) -> VideoProvider:
 
 # ---- public functions -------------------------------------------------------------
 
+def _media_out_path(out_path: str | None, dest: Path, prefix: str,
+                    prompt: str, ext: str) -> Path:
+    """Resolve a caller-supplied output path, confined to the media dir.
+
+    Relative paths are joined to ``dest``; absolute paths must already
+    live inside ``dest``. The path is fully resolved (collapsing ``..``
+    and symlinks) and rejected with :class:`MediaError` when it would
+    land outside the media dir — media tools must not become a
+    filesystem-sandbox escape like the file/shell tools are careful not
+    to be. Parent directories are created as needed.
+    """
+    if out_path:
+        p = Path(out_path).expanduser()
+        if not p.is_absolute():
+            p = dest / p
+        resolved = p.resolve()
+        if resolved != dest and dest.resolve() not in resolved.parents:
+            raise MediaError(
+                f"out_path escapes the media dir: {out_path!r}")
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        return resolved
+    return dest / _unique_name(prefix, prompt, ext)
+
+
 def generate_image(prompt: str, size: str = "1024x1024",
                    out_path: str | None = None,
                    config: dict | None = None,
@@ -434,16 +458,10 @@ def generate_image(prompt: str, size: str = "1024x1024",
         return f"ERROR: {exc}"
     home = Path((config or {}).get("home", "") or agentkai_home())
     dest = media_dir(home)
-    if out_path:
-        p = Path(out_path).expanduser()
-        if not p.is_absolute():
-            p = dest / p
-        # Keep outputs inside the media dir or an explicit absolute path the
-        # caller chose; refuse traversal tricks on relative paths.
-        if not p.is_absolute():
-            return f"ERROR: bad out_path: {out_path!r}"
-    else:
-        p = dest / _unique_name("img", prompt, ".png")
+    try:
+        p = _media_out_path(out_path, dest, "img", prompt, ".png")
+    except MediaError as exc:
+        return f"ERROR: {exc}"
     try:
         prov = provider or select_image_provider(config)
         result = prov.generate(prompt.strip(), width, height, p)
@@ -475,11 +493,10 @@ def generate_video(prompt: str, duration: int = 5,
         return f"ERROR: {exc}"
     home = Path((config or {}).get("home", "") or agentkai_home())
     dest = media_dir(home)
-    p = Path(out_path).expanduser() if out_path else None
-    if p is not None and not p.is_absolute():
-        p = dest / p
-    if p is None:
-        p = dest / _unique_name("vid", prompt, ".mp4")
+    try:
+        p = _media_out_path(out_path, dest, "vid", prompt, ".mp4")
+    except MediaError as exc:
+        return f"ERROR: {exc}"
     try:
         result = prov.generate(prompt.strip(), duration, p)
     except MediaError as exc:
@@ -510,11 +527,10 @@ def edit_image(image: str, prompt: str, mask: str | None = None,
         return f"ERROR: image not found: {image!r}"
     home = Path((config or {}).get("home", "") or agentkai_home())
     dest = media_dir(home)
-    p = Path(out_path).expanduser() if out_path else None
-    if p is not None and not p.is_absolute():
-        p = dest / p
-    if p is None:
-        p = dest / _unique_name("edit", prompt, ".png")
+    try:
+        p = _media_out_path(out_path, dest, "edit", prompt, ".png")
+    except MediaError as exc:
+        return f"ERROR: {exc}"
     try:
         prov = provider or select_image_provider(config)
         result = prov.edit(img, mask_p, prompt.strip(),
