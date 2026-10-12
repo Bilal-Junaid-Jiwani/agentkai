@@ -1,2 +1,0 @@
-[console_scripts]
-agentkai = agentkai.cli:main
