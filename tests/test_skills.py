@@ -1,6 +1,7 @@
 """Tests for the skills framework + bundled skills. No network anywhere."""
 import base64
 import json
+import subprocess
 
 import pytest
 
@@ -593,6 +594,85 @@ def test_install_pin_mismatch_fails(home_env, tmp_path, monkeypatch):
     with pytest.raises(SkillError, match="pin"):
         install_skill("owner/repo", trust_remote=True, pin="a" * 40)
     assert not (home_env / "skills" / "myskill").exists()
+
+
+# ---- pin actually checks out the commit (0.5.5) ------------------------------
+
+def _make_git_skill_repo(tmp_path):
+    """Real local git repo with 3 commits; SKILL.md at top level in each."""
+    repo = tmp_path / "gitremote"
+    repo.mkdir()
+
+    def git(*args):
+        return subprocess.run(["git", "-C", str(repo), *args], check=True,
+                              capture_output=True, text=True)
+
+    git("init", "-q")
+    git("config", "user.email", "test@example.com")
+    git("config", "user.name", "test")
+    shas = []
+    for i in (1, 2, 3):
+        (repo / "SKILL.md").write_text(
+            "---\nname: pinskillsrc\ndescription: Pinned skill.\n"
+            f"version: 0.{i}.0\n---\n# v{i}\n")
+        git("add", "-A")
+        git("commit", "-qm", f"c{i}")
+        shas.append(git("rev-parse", "HEAD").stdout.strip())
+    return repo, shas
+
+
+@pytest.fixture()
+def fake_git_remote(monkeypatch, tmp_path):
+    """Route the git-install branch at a real local repo (no network)."""
+    repo, shas = _make_git_skill_repo(tmp_path)
+    monkeypatch.setattr(
+        "agentkai.skills._looks_like_git_url", lambda s: True)
+    monkeypatch.setattr(
+        "agentkai.skills._resolve_git_url", lambda s: str(repo))
+    return shas
+
+
+def _installed_head(dest):
+    return subprocess.run(
+        ["git", "-C", str(dest), "rev-parse", "HEAD"],
+        check=True, capture_output=True, text=True).stdout.strip()
+
+
+def test_install_pin_checks_out_older_commit(home_env, fake_git_remote):
+    """--pin to a non-HEAD commit must install THAT commit, not HEAD."""
+    old_sha = fake_git_remote[0]
+    dest = install_skill("fake-git-source", name="pinskillsrc",
+                         trust_remote=True, pin=old_sha)
+    assert _installed_head(dest) == old_sha
+    manifest = json.loads((dest / "manifest.json").read_text())
+    assert manifest["commit_sha"] == old_sha
+    # The checked-out content is really the old commit's.
+    assert "version: 0.1.0" in (dest / "SKILL.md").read_text()
+    # And the pinned skill still loads + verifies cleanly.
+    assert SkillLoader().load("pinskillsrc").version == "0.1.0"
+
+
+def test_install_pin_to_head_commit(home_env, fake_git_remote):
+    head_sha = fake_git_remote[-1]
+    dest = install_skill("fake-git-source", name="pinskillsrc",
+                         trust_remote=True, pin=head_sha)
+    assert _installed_head(dest) == head_sha
+    assert SkillLoader().load("pinskillsrc").version == "0.3.0"
+
+
+def test_install_pin_invalid_format_rejected(home_env, fake_git_remote):
+    for bad in ("not-a-sha", "a" * 39, "z" * 40, "--upload-pack=id"):
+        with pytest.raises(SkillError, match="invalid pin"):
+            install_skill("fake-git-source", name="pinskillsrc",
+                          trust_remote=True, pin=bad)
+    assert not (home_env / "skills" / "pinskillsrc").exists()
+
+
+def test_install_pin_unfetchable_commit_fails(home_env, fake_git_remote):
+    with pytest.raises(SkillError, match="failed to pin"):
+        install_skill("fake-git-source", name="pinskillsrc",
+                      trust_remote=True, pin="d" * 40)
+    assert not (home_env / "skills" / "pinskillsrc").exists()
 
 
 # ---- manifest fail-closed (0.5.3) -------------------------------------------

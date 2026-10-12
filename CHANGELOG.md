@@ -3,6 +3,26 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.5.5] - 2026-10-12
+
+### Fixed
+- **`--pin` on skill installs now actually checks out the pinned commit.**
+  The 0.5.2 supply-chain hardening added `--pin`/`pin` to pin a remote
+  skill install to a commit SHA, but the implementation only compared
+  `git clone --depth 1`'s HEAD against the pin afterwards and never
+  checked the pin out — so pinning to any non-HEAD commit always failed
+  with "pin mismatch" (verified with a repro against a real 3-commit
+  git repo), and the feature's whole point (install the exact commit
+  you reviewed) was silently broken. `install_skill()` now fetches the
+  pinned commit and `git checkout --detach`s it before recording
+  `commit_sha` in the manifest; the pin must be a full 40-hex SHA
+  (required for fetch-by-SHA, and the strict shape also rules out
+  option injection through the pin value), and an unfetchable commit
+  fails the install with the half-cloned directory cleaned up, as
+  before. Four new tests in `tests/test_skills.py` cover pinning to an
+  older commit (checked-out tree, manifest SHA, and clean load),
+  pinning to HEAD, invalid pin formats, and unfetchable commits.
+
 ## [0.5.4] - 2026-10-11
 
 ### Fixed

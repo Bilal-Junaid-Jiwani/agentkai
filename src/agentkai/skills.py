@@ -304,6 +304,35 @@ def _git_head_sha(dest: Path) -> str | None:
     return sha or None
 
 
+def _checkout_pin(dest: Path, resolved_url: str, pin: str) -> None:
+    """Fetch and check out a pinned commit in a freshly cloned skill repo.
+
+    ``git clone --depth 1`` lands on the remote's default HEAD, so a pin
+    to any other commit must be fetched and checked out explicitly —
+    merely comparing HEAD to the pin afterwards could never succeed for
+    a non-HEAD commit. The pin must be a full 40-hex commit SHA (fetch
+    by SHA needs the full hash, and the strict shape rules out option
+    injection through the pin value).
+    """
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", pin or ""):
+        raise SkillError(
+            f"invalid pin {pin!r}: expected a 40-character commit SHA")
+    for cmd in (
+        ["git", "-C", str(dest), "fetch", "--depth", "1", "origin", pin],
+        ["git", "-C", str(dest), "checkout", "--detach", pin],
+    ):
+        try:
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=120)
+        except Exception as exc:
+            raise SkillError(
+                f"failed to pin {resolved_url!r} to commit {pin}: {exc}")
+        if proc.returncode != 0:
+            raise SkillError(
+                f"failed to pin {resolved_url!r} to commit {pin}: "
+                f"{proc.stderr.strip()[:300]}")
+
+
 def _verify_user_skill(path: Path) -> None:
     """Fail-closed integrity check for installed user skills.
 
@@ -355,7 +384,9 @@ def install_skill(source: str, name: str | None = None,
 
     Remote (git) installs require ``trust_remote=True``: code from the
     repo runs inside agentkai via ``tools.py``, so cloning is an explicit
-    trust decision. ``pin`` optionally pins the clone to a commit SHA.
+    trust decision. ``pin`` checks out exactly this commit SHA after
+    cloning (full 40-hex SHA required); the install fails if the commit
+    cannot be fetched. Local-directory installs ignore ``pin``.
     """
     local_path = Path(source).expanduser()
     is_local = local_path.is_dir()
@@ -396,12 +427,13 @@ def install_skill(source: str, name: str | None = None,
                 f"{source!r} is not a skill: no SKILL.md found at top level")
         commit_sha: str | None = None
         if is_git:
-            commit_sha = _git_head_sha(dest)
             if pin:
-                if commit_sha != pin:
-                    raise SkillError(
-                        f"pin mismatch for {resolved_url!r}: "
-                        f"expected {pin}, got {commit_sha}")
+                _checkout_pin(dest, resolved_url, pin)
+            commit_sha = _git_head_sha(dest)
+            if pin and commit_sha != pin:
+                raise SkillError(
+                    f"pin mismatch for {resolved_url!r}: "
+                    f"expected {pin}, got {commit_sha}")
         manifest: dict[str, Any] = {
             "name": skill_name,
             "source": source,
