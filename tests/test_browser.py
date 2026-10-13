@@ -6,6 +6,7 @@ are marked and skipped unless AGENTKAI_REAL_BROWSER=1.
 from __future__ import annotations
 
 import os
+import socket
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,10 @@ import pytest
 from agentkai import browser as B
 from agentkai.browser import BrowserSession, browser_tools
 from agentkai.tools import PermissionDenied, ApprovalRequired
+
+# Real resolver, captured before fixtures monkeypatch socket.getaddrinfo.
+# Literal IPs (e.g. 169.254.169.254) resolve without touching DNS.
+_REAL_GETADDRINFO = socket.getaddrinfo
 
 REAL_BROWSER = os.environ.get("AGENTKAI_REAL_BROWSER") == "1"
 needs_real_browser = pytest.mark.skipif(
@@ -231,6 +236,21 @@ def tools(session):
     return {t.name: t for t in browser_tools(session)}
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_dns(monkeypatch):
+    """Browser URL validation resolves the host; keep the suite hermetic.
+
+    Every hostname resolves to a public IP here, so navigation tests never
+    touch real DNS. Individual tests override getaddrinfo for their case.
+    """
+    import agentkai.tools as tools_mod
+
+    def fake_getaddrinfo(host, port, *a, **k):
+        return [(2, 1, 6, "", ("93.184.216.34", 0))]
+
+    monkeypatch.setattr(tools_mod.socket, "getaddrinfo", fake_getaddrinfo)
+
+
 # ---- lifecycle -------------------------------------------------------------
 
 def test_lazy_start(session):
@@ -300,6 +320,58 @@ def test_goto_blocks_embedded_credentials(tools):
 def test_goto_rejects_empty(tools):
     out = tools["browser_goto"].run(url="   ")
     assert out.startswith("ERROR:")
+
+
+def test_goto_allows_public_host():
+    # hermetic DNS fixture resolves everything to a public IP
+    assert B._validate_url("https://example.com/page") == "https://example.com/page"
+
+
+def test_goto_blocks_private_host(tools, monkeypatch):
+    import agentkai.tools as tools_mod
+
+    def fake_getaddrinfo(host, port, *a, **k):
+        return [(2, 1, 6, "", ("192.168.1.5", 0))]
+
+    monkeypatch.setattr(tools_mod.socket, "getaddrinfo", fake_getaddrinfo)
+    out = tools["browser_goto"].run(url="http://example.com/")
+    assert out.startswith("ERROR:")
+    assert "non-public" in out
+
+
+def test_goto_blocks_loopback(tools, monkeypatch):
+    import agentkai.tools as tools_mod
+
+    def fake_getaddrinfo(host, port, *a, **k):
+        return [(2, 1, 6, "", ("127.0.0.1", 0))]
+
+    monkeypatch.setattr(tools_mod.socket, "getaddrinfo", fake_getaddrinfo)
+    out = tools["browser_goto"].run(url="http://localhost:8501/")
+    assert out.startswith("ERROR:")
+    assert "non-public" in out
+
+
+def test_goto_blocks_link_local_metadata_ip(tools, monkeypatch):
+    # 169.254.169.254 is a literal IP: the real resolver needs no DNS for
+    # it, so this exercises the actual link-local refusal end to end.
+    import agentkai.tools as tools_mod
+
+    monkeypatch.setattr(tools_mod.socket, "getaddrinfo", _REAL_GETADDRINFO)
+    with pytest.raises(B.BrowserError, match="non-public"):
+        B._validate_url("http://169.254.169.254/latest/meta-data/")
+
+
+def test_goto_rejects_unresolvable_host(tools, monkeypatch):
+    import agentkai.tools as tools_mod
+    import socket as socket_mod
+
+    def boom(host, port, *a, **k):
+        raise socket_mod.gaierror("nope")
+
+    monkeypatch.setattr(tools_mod.socket, "getaddrinfo", boom)
+    out = tools["browser_goto"].run(url="http://nonexistent.invalid/")
+    assert out.startswith("ERROR:")
+    assert "resolve" in out
 
 
 def test_back(session, tools):

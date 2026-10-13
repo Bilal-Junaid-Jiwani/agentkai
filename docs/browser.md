@@ -9,7 +9,7 @@ browser profile, so signing in once keeps working across runs.
 
 | Tool | What it does |
 |---|---|
-| `browser_goto` | Navigate to a URL (http/https only; credentials-in-URL rejected) |
+| `browser_goto` | Navigate to a URL (http/https only; credentials-in-URL and non-public hosts rejected) |
 | `browser_read` | Read the rendered page as text |
 | `browser_click` | Click an element (by selector or visible text) |
 | `browser_fill` | Fill a form field |
@@ -36,6 +36,10 @@ they never pretend to work.
 ## Safety notes
 
 - Only `http`/`https` URLs; anything else is rejected.
+- Like `fetch_url`, navigation refuses hosts that resolve to non-public
+  addresses (loopback, private ranges, link-local such as the cloud
+  metadata endpoint), so the browser can never be steered at internal
+  services or metadata URLs.
 - Downloads land in a directory you choose; filenames are de-duplicated,
   never overwritten silently.
 - Like every tool, browser actions go through the permission gate:

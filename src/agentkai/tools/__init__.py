@@ -351,17 +351,14 @@ class _RedirectGuard(urllib.request.HTTPRedirectHandler):
         return new_req
 
 
-def _validate_url(url: str) -> urllib.parse.ParseResult:
-    """Reject non-HTTP(S) URLs, embedded credentials, and non-public hosts."""
-    parsed = urllib.parse.urlparse(url)
-    if parsed.scheme not in ("http", "https"):
-        raise ValueError(f"Only http/https URLs are allowed, got {parsed.scheme!r}")
-    if not parsed.hostname:
-        raise ValueError(f"URL has no host: {url!r}")
-    if parsed.username or parsed.password:
-        # Never let credentials reach the wire or the logs.
-        raise ValueError("URLs with embedded credentials are not allowed")
-    host = parsed.hostname
+def _assert_public_host(host: str) -> None:
+    """Refuse loopback/private/link-local/etc. hosts (SSRF guard).
+
+    Resolves ``host`` and raises :exc:`ValueError` when any resolved
+    address is non-public, or when the host does not resolve at all.
+    Shared by the ``fetch_url`` tool and the browser engine so both
+    enforce the same boundary.
+    """
     try:
         infos = socket.getaddrinfo(host, None)
     except socket.gaierror:
@@ -377,6 +374,19 @@ def _validate_url(url: str) -> urllib.parse.ParseResult:
             or ip.is_unspecified
         ):
             raise ValueError(f"Refusing non-public address for {host!r} ({ip})")
+
+
+def _validate_url(url: str) -> urllib.parse.ParseResult:
+    """Reject non-HTTP(S) URLs, embedded credentials, and non-public hosts."""
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"Only http/https URLs are allowed, got {parsed.scheme!r}")
+    if not parsed.hostname:
+        raise ValueError(f"URL has no host: {url!r}")
+    if parsed.username or parsed.password:
+        # Never let credentials reach the wire or the logs.
+        raise ValueError("URLs with embedded credentials are not allowed")
+    _assert_public_host(parsed.hostname)
     return parsed
 
 

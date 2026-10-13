@@ -3,6 +3,32 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.5.6] - 2026-10-13
+
+### Fixed
+- **Browser navigation now refuses non-public hosts (SSRF gap closed).**
+  `fetch_url` has long refused hosts that resolve to loopback, private,
+  link-local, or otherwise non-public addresses, but the real-Chromium
+  browser tool's URL validation only checked the scheme and rejected
+  credentials-in-URL — so `browser_goto http://169.254.169.254/...`
+  (the cloud metadata endpoint), `http://127.0.0.1:8501/`, or
+  `http://192.168.1.10/...` loaded happily (verified with a repro:
+  all three passed validation while `fetch_url` refused them). A
+  prompt-injected page could have steered the browser at internal
+  services or metadata URLs and the response would have landed in the
+  agent context. The non-public-host check is now extracted from
+  `tools._validate_url` into a shared `_assert_public_host()` helper and
+  enforced by `browser._validate_url`, so `browser_goto` (and `new_tab`
+  with a URL, which routes through the same gate) refuses unresolvable
+  hosts and every non-public address class with the same messages as
+  `fetch_url`. Six new tests in `tests/test_browser.py` cover private,
+  loopback, and link-local (metadata IP) refusals, unresolvable hosts,
+  and the public-host allow path; the suite's DNS is now fully mocked
+  so browser navigation tests never touch real DNS. Known limitation,
+  unchanged: redirects *within* an already-loaded page are followed by
+  Chromium itself and are not re-validated hop-by-hop the way
+  `fetch_url` does.
+
 ## [0.5.5] - 2026-10-12
 
 ### Fixed

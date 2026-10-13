@@ -9,6 +9,10 @@ Safety model:
 - Only ``http``/``https`` URLs are allowed. ``file://`` and every other
   scheme (``about:``, ``data:``, ``javascript:``, ``chrome:``, ...) are
   rejected before anything loads.
+- Like the ``fetch_url`` tool, navigation refuses hosts that resolve to
+  non-public addresses (loopback, private ranges, link-local such as the
+  cloud metadata endpoint) — the browser can never be steered at internal
+  services or metadata URLs.
 - Form submits over plain ``http`` print a stderr warning.
 - Downloads are restricted to an allowlist of document/media/archive
   extensions; executables and scripts are refused.
@@ -31,7 +35,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
 
-from .tools import Tool
+from .tools import Tool, _assert_public_host
 
 __all__ = [
     "BrowserSession",
@@ -121,7 +125,14 @@ def _require_playwright_factory() -> Callable[[], Any]:
 
 
 def _validate_url(url: str) -> str:
-    """Allow only http/https. Reject credentials-in-URL and empty hosts."""
+    """Allow only http/https on public hosts.
+
+    Rejects credentials-in-URL, empty hosts, and — like the ``fetch_url``
+    tool — anything that resolves to a non-public address (loopback,
+    private, link-local, ...). The browser is the agent's hands on the
+    web, so a navigation to e.g. the cloud metadata endpoint must be
+    refused here, before Chromium ever loads the page.
+    """
     url = (url or "").strip()
     parsed = urlparse(url)
     scheme = parsed.scheme.lower()
@@ -136,6 +147,10 @@ def _validate_url(url: str) -> str:
     if parsed.username or parsed.password:
         # Never let credentials reach history, logs, or the wire via us.
         raise BrowserError("URLs with embedded credentials are not allowed")
+    try:
+        _assert_public_host(parsed.hostname)
+    except ValueError as exc:
+        raise BrowserError(str(exc))
     return url
 
 
