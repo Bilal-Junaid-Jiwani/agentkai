@@ -183,11 +183,32 @@ class FakePage:
         return FakeExpectDownload(dl)
 
 
+class FakeRoute:
+    def __init__(self):
+        self.aborted = False
+        self.continued = False
+
+    def abort(self, *args):
+        self.aborted = True
+
+    def continue_(self, *args):
+        self.continued = True
+
+
+class FakeRequest:
+    def __init__(self, url):
+        self.url = url
+
+
 class FakeContext:
     def __init__(self):
         self.pages = [FakePage()]
         self.launch_kwargs = {}
         self.closed = False
+        self.routes = []  # [(pattern, handler)]
+
+    def route(self, pattern, handler):
+        self.routes.append((pattern, handler))
 
     def new_page(self):
         page = FakePage(url="about:blank")
@@ -597,6 +618,116 @@ def test_gate_sees_tool_risk_and_args(tools):
     assert seen["tool"] == "browser_fill"
     assert seen["risk"] == "high"
     assert seen["args"]["text"] == "x"
+
+
+# ---- network request gate --------------------------------------------------
+
+def _gated(session, url):
+    """Drive the session's route handler for one request URL."""
+    assert session._context.routes, "no route handler registered"
+    pattern, handler = session._context.routes[0]
+    assert pattern == "**/*"
+    route = FakeRoute()
+    handler(route, FakeRequest(url))
+    return route
+
+
+def test_gate_registered_on_start(session):
+    session.ensure_started()
+    assert len(session._context.routes) == 1
+    assert session._context.routes[0][0] == "**/*"
+
+
+def test_gate_lets_public_requests_through(session):
+    # hermetic DNS fixture: everything resolves to a public IP
+    session.ensure_started()
+    route = _gated(session, "https://example.com/app.js")
+    assert route.continued and not route.aborted
+    route = _gated(session, "wss://example.com/socket")
+    assert route.continued and not route.aborted
+
+
+def test_gate_aborts_metadata_redirect_hop(session, monkeypatch):
+    # Literal link-local IP: the real resolver needs no DNS for it, so
+    # this exercises the true refusal path — a redirect to the cloud
+    # metadata endpoint is aborted hop-by-hop.
+    import agentkai.tools as tools_mod
+    monkeypatch.setattr(tools_mod.socket, "getaddrinfo", _REAL_GETADDRINFO)
+    session.ensure_started()
+    route = _gated(session, "http://169.254.169.254/latest/meta-data/")
+    assert route.aborted and not route.continued
+
+
+def test_gate_aborts_loopback(session, monkeypatch):
+    import agentkai.tools as tools_mod
+    monkeypatch.setattr(tools_mod.socket, "getaddrinfo", _REAL_GETADDRINFO)
+    session.ensure_started()
+    route = _gated(session, "http://127.0.0.1:8501/rpc")
+    assert route.aborted and not route.continued
+
+
+def test_gate_aborts_private_host(session, monkeypatch):
+    import agentkai.tools as tools_mod
+
+    def fake_getaddrinfo(host, port, *a, **k):
+        return [(2, 1, 6, "", ("192.168.1.5", 0))]
+
+    monkeypatch.setattr(tools_mod.socket, "getaddrinfo", fake_getaddrinfo)
+    session.ensure_started()
+    route = _gated(session, "http://example.com/internal")
+    assert route.aborted and not route.continued
+
+
+def test_gate_aborts_unresolvable_host(session, monkeypatch):
+    import agentkai.tools as tools_mod
+    import socket as socket_mod
+
+    def boom(host, port, *a, **k):
+        raise socket_mod.gaierror("nope")
+
+    monkeypatch.setattr(tools_mod.socket, "getaddrinfo", boom)
+    session.ensure_started()
+    route = _gated(session, "http://ghost.invalid/x")
+    assert route.aborted and not route.continued
+
+
+def test_gate_aborts_file_urls(session):
+    session.ensure_started()
+    route = _gated(session, "file:///etc/passwd")
+    assert route.aborted and not route.continued
+
+
+def test_gate_lets_harmless_schemes_through(session):
+    session.ensure_started()
+    for url in ("data:image/png;base64,iVBOR",
+                "blob:https://example.com/abc",
+                "about:blank",
+                "chrome://newtab/"):
+        route = _gated(session, url)
+        assert route.continued and not route.aborted, url
+
+
+def test_gate_aborts_ws_to_loopback(session, monkeypatch):
+    import agentkai.tools as tools_mod
+    monkeypatch.setattr(tools_mod.socket, "getaddrinfo", _REAL_GETADDRINFO)
+    session.ensure_started()
+    route = _gated(session, "ws://127.0.0.1:9000/sock")
+    assert route.aborted and not route.continued
+
+
+def test_gate_fail_closed_on_broken_route(session):
+    # A route object that explodes must not let the request through.
+    session.ensure_started()
+    _, handler = session._context.routes[0]
+
+    class BoomRoute:
+        def abort(self, *a):
+            raise RuntimeError("nope")
+
+        def continue_(self, *a):
+            raise AssertionError("must not continue")
+
+    handler(BoomRoute(), FakeRequest("https://example.com/"))  # no raise
 
 
 # ---- real browser (opt-in) ---------------------------------------------------

@@ -38,8 +38,13 @@ they never pretend to work.
 - Only `http`/`https` URLs; anything else is rejected.
 - Like `fetch_url`, navigation refuses hosts that resolve to non-public
   addresses (loopback, private ranges, link-local such as the cloud
-  metadata endpoint), so the browser can never be steered at internal
-  services or metadata URLs.
+  metadata endpoint) — and a network-layer request gate re-enforces the
+  same boundary on every request Chromium makes afterwards (redirect
+  hops, subresources, XHR/fetch, websockets), aborting any that target
+  non-public hosts. `file://` requests are aborted at the network layer
+  too, so a page can never read your local disk. The browser can never
+  be steered at internal services or metadata URLs, not even by a page
+  it already loaded.
 - Downloads land in a directory you choose; filenames are de-duplicated,
   never overwritten silently.
 - Like every tool, browser actions go through the permission gate:

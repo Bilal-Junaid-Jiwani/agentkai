@@ -35,7 +35,9 @@ commands (`rm -rf /`, disk wipes, fork bombs). This is a blocklist, not a
 sandbox: it stops accidents and casual abuse, not a determined attacker.
 `fetch_url` refuses non-HTTP(S) URLs, embedded credentials, and non-public
 hosts, and re-validates every redirect hop. The browser's `browser_goto`
-enforces the same non-public-host boundary at navigation time.
+enforces the same non-public-host boundary at navigation time, and a
+network-layer request gate re-enforces it on every subsequent request
+Chromium makes (redirect hops, subresources, XHR/fetch, websockets).
 
 ## The permission gate
 

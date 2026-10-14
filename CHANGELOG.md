@@ -3,6 +3,33 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.0] - 2026-10-14
+
+### Added
+- **Browser request gate: the non-public-host SSRF boundary now applies
+  to every request Chromium makes, not just the initial navigation.**
+  0.5.6 closed the navigation-time gap and documented the remaining
+  limitation honestly — redirect hops, subresources, XHR/fetch, and
+  websockets fired by a loaded page were followed by Chromium itself with
+  no re-validation, so a prompt-injected page could have steered the
+  browser at `http://169.254.169.254/latest/meta-data/`, `127.0.0.1`, or
+  `192.168.x.x` and read the response into the page (and into the
+  agent's context). `BrowserSession` now registers a context-wide
+  Playwright route handler (`**/*`, covering all tabs including ones
+  opened later) that enforces the same `_assert_public_host()` boundary
+  as `fetch_url` hop-by-hop: requests to non-public or unresolvable
+  hosts are aborted, as are `file://` requests (a page can never read
+  the local disk, even via iframe/subresource). Harmless schemes
+  (`data:`, `blob:`, `about:`, `chrome:`, ...) pass through untouched,
+  and the handler fails closed — an unexpected error aborts the
+  request rather than letting it through. Eleven new tests in
+  `tests/test_browser.py` cover registration, the public-host allow
+  path (http/https and wss), and aborts for link-local metadata IP,
+  loopback, private, and unresolvable hosts, `file://` URLs, ws-to-loopback,
+  harmless schemes, and the fail-closed path. Playwright's route handler
+  fires per redirect hop, so this supersedes the 0.5.6 known-limitation
+  note.
+
 ## [0.5.6] - 2026-10-13
 
 ### Fixed

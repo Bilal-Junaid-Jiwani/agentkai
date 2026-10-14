@@ -11,8 +11,13 @@ Safety model:
   rejected before anything loads.
 - Like the ``fetch_url`` tool, navigation refuses hosts that resolve to
   non-public addresses (loopback, private ranges, link-local such as the
-  cloud metadata endpoint) — the browser can never be steered at internal
-  services or metadata URLs.
+  cloud metadata endpoint) — and a network-layer request gate enforces
+  the same boundary on *every* request Chromium makes afterwards
+  (redirect hops, subresources, XHR/fetch, websockets), aborting any
+  that target non-public hosts. The browser can never be steered at
+  internal services or metadata URLs, not even by a page it loaded.
+- ``file://`` requests are aborted at the network layer too: a page can
+  never read the local disk, even through an iframe or subresource.
 - Form submits over plain ``http`` print a stderr warning.
 - Downloads are restricted to an allowlist of document/media/archive
   extensions; executables and scripts are refused.
@@ -220,6 +225,10 @@ class BrowserSession:
         )
         self._context.set_default_navigation_timeout(NAV_TIMEOUT_MS)
         self._context.set_default_timeout(ACTION_TIMEOUT_MS)
+        # Network-layer SSRF gate (see _on_route): every request the
+        # context's pages make passes through it. Context-level routing
+        # covers all pages, including tabs opened later.
+        self._context.route("**/*", self._on_route)
         pages = list(self._context.pages)
         self._page = pages[0] if pages else self._context.new_page()
         self._pages = [self._page]
@@ -249,6 +258,50 @@ class BrowserSession:
     @property
     def started(self) -> bool:
         return self._page is not None
+
+    # -- network request gate -------------------------------------------
+
+    def _on_route(self, route: Any, request: Any) -> None:
+        """Playwright route handler: abort requests Chromium must not make.
+
+        ``_validate_url`` only sees the URL the agent asked for. Everything
+        the page does on its own — redirect hops, subresources, XHR/fetch,
+        websockets — bypasses it, because Chromium follows those itself.
+        This gate runs for every request in the session and aborts:
+
+        - ``http``/``https``/``ws``/``wss`` requests whose host resolves
+          to a non-public address (loopback, private, link-local,
+          multicast, reserved, unspecified) or does not resolve at all —
+          same boundary as ``fetch_url``;
+        - ``file://`` requests (pages must never read the local disk);
+        - anything that fails to parse (fail closed).
+
+        Harmless schemes (``data:``, ``blob:``, ``about:``, ``chrome:``,
+        ``chrome-extension:``, ...) are let through untouched.
+        """
+        try:
+            parsed = urlparse(request.url or "")
+            scheme = parsed.scheme.lower()
+            if scheme in ("http", "https", "ws", "wss"):
+                host = parsed.hostname
+                if not host:
+                    route.abort()
+                    return
+                try:
+                    _assert_public_host(host)
+                except ValueError:
+                    route.abort()
+                    return
+                route.continue_()
+            elif scheme == "file":
+                route.abort()
+            else:
+                route.continue_()
+        except Exception:  # noqa: BLE001 - fail closed, never hang a request
+            try:
+                route.abort()
+            except Exception:  # noqa: BLE001 - best effort
+                pass
 
     # -- navigation -----------------------------------------------------
 
