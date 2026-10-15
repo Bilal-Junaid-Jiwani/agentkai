@@ -451,6 +451,44 @@ def test_whatsapp_bridge_fake_sidecar():
     wa.stop()
 
 
+def test_whatsapp_bridge_seen_cache_is_bounded():
+    """The dedup cache must not grow forever in a long-running bridge."""
+    from agentkai.channels import whatsapp as wa_mod
+    from agentkai.channels.whatsapp import WhatsAppBridge
+
+    class FakeWA(WhatsAppBridge):
+        def __init__(self):
+            super().__init__(sidecar_url="http://fake")
+            self._events = []
+
+        def _fetch_events(self):
+            e, self._events = self._events, []
+            return e
+
+    wa = FakeWA()
+    got = []
+    wa.on_message = got.append
+    old_cap = wa_mod.SEEN_CAP
+    wa_mod.SEEN_CAP = 50
+    try:
+        for i in range(70):
+            wa._events = [{"id": f"m{i}", "from": "+1555",
+                           "text": f"msg {i}", "ts": 1000 + i}]
+            wa.poll_once()
+        assert len(got) == 70  # every new id still dispatched
+        assert len(wa._seen) == 50  # ...while the cache stops growing
+        assert len(wa._seen_order) == 50
+        assert "m0" not in wa._seen  # oldest-first eviction
+        assert "m69" in wa._seen
+        # within-window dedup still works
+        wa._events = [{"id": "m69", "from": "+1555",
+                       "text": "msg 69", "ts": 2000}]
+        wa.poll_once()
+        assert len(got) == 70
+    finally:
+        wa_mod.SEEN_CAP = old_cap
+
+
 # ---- config ----------------------------------------------------------------------------
 
 def test_config_roundtrip(tmp_path):

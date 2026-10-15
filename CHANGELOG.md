@@ -3,6 +3,19 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.1] - 2026-10-15
+
+### Fixed
+- **WhatsApp bridge: the seen-message-id dedup cache no longer grows
+  without bound.** `WhatsAppBridge._seen` collected every sidecar event id
+  it ever dispatched, so a gateway left running for weeks would keep the
+  full history in memory forever. The cache is now capped at
+  `SEEN_CAP = 5000` ids with oldest-first eviction. Eviction is safe
+  because the sidecar only returns events at or after the `since`
+  watermark, so a re-sent evicted id simply gets re-dispatched — the
+  correct fallback. A new test in `tests/test_channels.py` verifies the
+  bound, oldest-first eviction, and that within-window dedup still works.
+
 ## [0.6.0] - 2026-10-14
 
 ### Added

@@ -21,12 +21,20 @@ from __future__ import annotations
 
 import threading
 import time
+from collections import deque
 
 import httpx
 
 from .core import Channel, InboundMessage
 
 MAX_TEXT = 4000
+
+# Dedup-cache bound: the bridge polls every few seconds, forever, so the
+# seen-message-id set must not grow without limit in a long-running gateway.
+# Eviction is safe because the sidecar only returns events at/after the
+# ``since`` watermark — an evicted id can only be re-sent if the sidecar
+# replays history, in which case re-dispatching is the correct fallback.
+SEEN_CAP = 5000
 
 
 class WhatsAppBridge(Channel):
@@ -44,7 +52,10 @@ class WhatsAppBridge(Channel):
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._since = time.time()
+        # Bounded dedup cache: `_seen_order` holds ids oldest-first so the
+        # oldest can be evicted from `_seen` once the cache hits SEEN_CAP.
         self._seen: set[str] = set()
+        self._seen_order: deque[str] = deque()
 
     # -- Channel interface --------------------------------------------------
 
@@ -92,6 +103,9 @@ class WhatsAppBridge(Channel):
                 continue
             if ev_id:
                 self._seen.add(ev_id)
+                self._seen_order.append(ev_id)
+                while len(self._seen_order) > SEEN_CAP:
+                    self._seen.discard(self._seen_order.popleft())
             self._since = max(self._since, float(ev.get("ts", self._since)))
             msg = self._parse(ev)
             if msg is not None and self.on_message is not None:
