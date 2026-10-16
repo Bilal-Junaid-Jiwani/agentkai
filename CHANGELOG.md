@@ -3,6 +3,21 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.2] - 2026-10-16
+
+### Fixed
+- **Permission gate: the in-memory audit log no longer grows without
+  bound.** `PermissionGate._audit` appended one entry per tool decision
+  for the whole process lifetime — and gateway agents (plus their gates)
+  live as long as the gateway runs, so a long-lived gateway leaked memory
+  on every tool call (verified: 50,000 decisions → 50,000 in-memory
+  entries). The in-memory `audit_log()` now keeps the most recent
+  `AUDIT_CAP = 2000` decisions (oldest-first eviction, same window as the
+  WhatsApp bridge's seen-id cache); when `audit_path` is configured, the
+  JSONL file remains the durable, complete record of every decision. Two
+  new tests in `tests/test_core.py` verify the bound/eviction and that the
+  JSONL file still records everything.
+
 ## [0.6.1] - 2026-10-15
 
 ### Fixed

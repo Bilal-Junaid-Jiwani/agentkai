@@ -204,6 +204,42 @@ def test_gate_as_adapter_for_tool_run(tmp_path):
         registry.get("exec").run(_gate=gate2.as_gate_fn(), command="ls")
 
 
+def test_audit_log_is_bounded(tmp_path):
+    """The in-memory audit list must not grow with every decision forever.
+
+    Gateway agents (and their gates) live for the process lifetime, so an
+    unbounded list is a real memory leak. The most recent AUDIT_CAP
+    decisions are kept, oldest first.
+    """
+    from agentkai.permissions import AUDIT_CAP
+    gate = PermissionGate(policy={"tool:bash": "allow"})
+    total = AUDIT_CAP + 500
+    for i in range(total):
+        gate.check(Action(tool="bash", args={"seq": i}, risk="low"))
+    log = gate.audit_log()
+    assert len(log) == AUDIT_CAP
+    # Oldest-first eviction: the first retained entry is decision #500,
+    # and the last is the most recent one.
+    assert log[0]["args"]["seq"] == 500
+    assert log[-1]["args"]["seq"] == total - 1
+    assert all(e["decision"] == "allow" for e in log)
+
+
+def test_audit_jsonl_still_records_everything(tmp_path):
+    """Bounding memory must not lose history: the JSONL file keeps all."""
+    from agentkai.permissions import AUDIT_CAP
+    path = tmp_path / "audit.jsonl"
+    gate = PermissionGate(policy={"tool:bash": "allow"}, audit_path=path)
+    total = AUDIT_CAP + 100
+    for i in range(total):
+        gate.check(Action(tool="bash", args={"seq": i}, risk="low"))
+    assert len(gate.audit_log()) == AUDIT_CAP
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == total
+    assert json.loads(lines[0])["args"]["seq"] == 0
+    assert json.loads(lines[-1])["args"]["seq"] == total - 1
+
+
 # -- 4. event log replay ---------------------------------------------------------
 
 def test_event_log_replay(tmp_path):

@@ -7,7 +7,9 @@ Tool authors declare a risk level on the tool (``agentkai.tools.Tool.risk``):
     high    — shell execution and other powerful actions    -> ask
 
 The gate is consulted before every tool execution and every decision is
-written to an audit log (in memory, plus optional JSONL file).
+written to an audit log: the most recent ``AUDIT_CAP`` decisions stay in
+memory (``audit_log()``), and — when ``audit_path`` is set — every decision
+is also appended to a JSONL file, which is the durable, unbounded record.
 
 Interop with ``agentkai.tools``: ``Tool.run`` accepts a gate callable with
 the signature ``gate(action: dict) -> "allow" | "ask" | "deny"`` where
@@ -24,6 +26,7 @@ from __future__ import annotations
 
 import json
 import threading
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,6 +34,12 @@ from typing import Callable, Literal
 
 Decision = Literal["allow", "ask", "deny"]
 Risk = Literal["low", "medium", "high"]
+
+# In-memory audit history is a recent-window view, not the full record: a
+# gateway's agents (and their gates) live for the whole process lifetime, so
+# an unbounded list would grow with every tool decision forever. The JSONL
+# ``audit_path`` file — when configured — remains the complete record.
+AUDIT_CAP = 2000
 
 DEFAULT_RISK_POLICY: dict[str, Decision] = {
     "low": "allow",
@@ -95,7 +104,10 @@ class PermissionGate:
         ``"ask"``. Defaults to :func:`cli_ask`. The dashboard will inject its
         own approval-card hook here.
     audit_path:
-        Optional JSONL file every decision is appended to.
+        Optional JSONL file every decision is appended to. This is the
+        durable, complete audit record; the in-memory
+        :meth:`audit_log` keeps only the most recent ``AUDIT_CAP`` entries
+        so long-running gateways don't grow memory without bound.
     """
 
     def __init__(self,
@@ -107,7 +119,7 @@ class PermissionGate:
         self.audit_path = Path(audit_path).expanduser() if audit_path else None
         if self.audit_path:
             self.audit_path.parent.mkdir(parents=True, exist_ok=True)
-        self._audit: list[dict] = []
+        self._audit: deque[dict] = deque(maxlen=AUDIT_CAP)
         self._lock = threading.Lock()
 
     # -- decision ------------------------------------------------------
@@ -167,7 +179,11 @@ class PermissionGate:
                     fh.write(json.dumps(entry, default=str) + "\n")
 
     def audit_log(self) -> list[dict]:
-        """Every decision this gate has made, oldest first."""
+        """The most recent ``AUDIT_CAP`` decisions, oldest first.
+
+        When ``audit_path`` is configured, the JSONL file holds the full,
+        unbounded history — this list is the bounded in-memory window.
+        """
         with self._lock:
             return list(self._audit)
 
