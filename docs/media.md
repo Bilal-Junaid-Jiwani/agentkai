@@ -41,6 +41,10 @@ SD answering → local SD; else an honest error).
 ## Editing
 
 `edit_image` does inpainting/edits (OpenAI provider; mask optional).
+The `image` and `mask` inputs must live inside the agent workspace
+(`~/.agentkai/workspace`); absolute paths outside it and `..`/symlink
+escapes are refused, so the tool can't exfiltrate arbitrary files to the
+remote provider.
 Generated files land in `~/.agentkai/media/` with unique names.
 
 ## What's not here
