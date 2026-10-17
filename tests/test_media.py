@@ -94,13 +94,76 @@ def test_generate_video_refuses_traversal_out_path(home):
 
 
 def test_edit_image_refuses_traversal_out_path(home):
-    src = home / "src.png"
+    src = home / "workspace" / "src.png"
+    src.parent.mkdir(parents=True, exist_ok=True)
     src.write_bytes(PNG_BYTES)
     res = edit_image(str(src), "blue", out_path="../../escape.png",
                      config=_cfg(home), provider=_StubWriter())
     assert isinstance(res, str) and res.startswith("ERROR:")
     assert "escapes the media dir" in res
     assert not list(home.rglob("escape.png"))
+
+
+# ---- edit_image input confinement (workspace is not an exfiltration hole) ------------
+
+def _write_ws(home, name):
+    ws = home / "workspace"
+    ws.mkdir(parents=True, exist_ok=True)
+    p = ws / name
+    p.write_bytes(PNG_BYTES)
+    return p
+
+
+def test_edit_image_absolute_path_outside_workspace_refused(home):
+    src = home / "src.png"
+    src.write_bytes(PNG_BYTES)
+    res = edit_image(str(src), "blue", config=_cfg(home),
+                     provider=_StubWriter())
+    assert isinstance(res, str) and res.startswith("ERROR:")
+    assert "escapes the agent workspace" in res
+
+
+def test_edit_image_traversal_outside_workspace_refused(home):
+    outside = home / "outside.png"
+    outside.write_bytes(PNG_BYTES)
+    res = edit_image("../outside.png", "blue", config=_cfg(home),
+                     provider=_StubWriter())
+    assert isinstance(res, str) and res.startswith("ERROR:")
+    assert "escapes the agent workspace" in res
+
+
+def test_edit_image_symlink_escape_refused(home, tmp_path):
+    ws = home / "workspace"
+    ws.mkdir(parents=True, exist_ok=True)
+    outside = tmp_path / "real.png"
+    outside.write_bytes(PNG_BYTES)
+    link = ws / "link.png"
+    link.symlink_to(outside)
+    res = edit_image(str(link), "blue", config=_cfg(home),
+                     provider=_StubWriter())
+    assert isinstance(res, str) and res.startswith("ERROR:")
+    assert "escapes the agent workspace" in res
+
+
+def test_edit_image_mask_outside_workspace_refused(home):
+    src = _write_ws(home, "src.png")
+    bad_mask = home / "mask.png"
+    bad_mask.write_bytes(PNG_BYTES)
+    res = edit_image(str(src), "inpaint", mask=str(bad_mask),
+                     config=_cfg(home), provider=_StubWriter())
+    assert isinstance(res, str) and res.startswith("ERROR:")
+    assert "escapes the agent workspace" in res
+
+
+def test_edit_image_paths_inside_workspace_accepted(home):
+    src = _write_ws(home, "src.png")
+    mask = _write_ws(home, "mask.png")
+    res = edit_image("src.png", "inpaint", mask="mask.png",
+                     config=_cfg(home), provider=_StubWriter())
+    assert res["provider"] == "stubwriter"
+    res2 = edit_image(str(src), "blue", config=_cfg(home),
+                      provider=_StubWriter())
+    assert res2["provider"] == "stubwriter"
 
 
 def test_absolute_out_path_outside_media_dir_refused(home):
@@ -242,8 +305,7 @@ def test_openai_edit_writes_file(home, monkeypatch):
         return {"data": [{"b64_json": PNG_B64}]}
 
     monkeypatch.setattr(media, "_post_multipart", fake_multipart)
-    src = home / "src.png"
-    src.write_bytes(PNG_BYTES)
+    src = _write_ws(home, "src.png")
     prov = OpenAIImagesProvider("sk-test", request=_fake_openai_ok)
     res = edit_image(str(src), "make it blue", config=_cfg(home),
                      provider=prov)
@@ -261,10 +323,8 @@ def test_openai_edit_with_mask(home, monkeypatch):
         return {"data": [{"b64_json": PNG_B64}]}
 
     monkeypatch.setattr(media, "_post_multipart", fake_multipart)
-    src = home / "src.png"
-    src.write_bytes(PNG_BYTES)
-    mask = home / "mask.png"
-    mask.write_bytes(PNG_BYTES)
+    src = _write_ws(home, "src.png")
+    mask = _write_ws(home, "mask.png")
     prov = OpenAIImagesProvider("sk-test", request=_fake_openai_ok)
     res = edit_image(str(src), "inpaint", mask=str(mask),
                      config=_cfg(home), provider=prov)
@@ -273,8 +333,11 @@ def test_openai_edit_with_mask(home, monkeypatch):
 
 
 def test_edit_missing_image_is_error(home):
-    res = edit_image(str(home / "nope.png"), "x", config=_cfg(home))
+    ws = home / "workspace"
+    ws.mkdir(parents=True, exist_ok=True)
+    res = edit_image(str(ws / "nope.png"), "x", config=_cfg(home))
     assert res.startswith("ERROR:")
+    assert "not found" in res
 
 
 # ---- local SD ---------------------------------------------------------------------

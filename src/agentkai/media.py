@@ -444,6 +444,31 @@ def _media_out_path(out_path: str | None, dest: Path, prefix: str,
     return dest / _unique_name(prefix, prompt, ext)
 
 
+def _media_in_path(image: str, home: Path, role: str) -> Path:
+    """Resolve a caller-supplied input file, confined to the agent workspace.
+
+    Relative paths resolve against ``home/workspace``; absolute paths must
+    already live inside it. The path is fully resolved (collapsing ``..``
+    and symlinks) and rejected with :class:`MediaError` when it would land
+    outside the workspace — a model must not be able to point
+    ``edit_image`` at an arbitrary file (e.g. ``~/.ssh/id_rsa`` or
+    ``/etc/passwd``) and have its bytes exfiltrated to a remote
+    image-editing provider.
+    """
+    root = home / "workspace"
+    root.mkdir(parents=True, exist_ok=True)
+    p = Path(image).expanduser()
+    if not p.is_absolute():
+        p = root / p
+    resolved = p.resolve()
+    if resolved != root and root.resolve() not in resolved.parents:
+        raise MediaError(
+            f"{role} file escapes the agent workspace: {image!r}")
+    if not resolved.is_file():
+        raise MediaError(f"{role} file not found: {image!r}")
+    return resolved
+
+
 def generate_image(prompt: str, size: str = "1024x1024",
                    out_path: str | None = None,
                    config: dict | None = None,
@@ -521,12 +546,13 @@ def edit_image(image: str, prompt: str, mask: str | None = None,
         width, height = _parse_size(size)
     except ValueError as exc:
         return f"ERROR: {exc}"
-    img = Path(image).expanduser()
-    mask_p = Path(mask).expanduser() if mask else None
-    if not img.is_file():
-        return f"ERROR: image not found: {image!r}"
     home = Path((config or {}).get("home", "") or agentkai_home())
     dest = media_dir(home)
+    try:
+        img = _media_in_path(image, home, "image")
+        mask_p = _media_in_path(mask, home, "mask") if mask else None
+    except MediaError as exc:
+        return f"ERROR: {exc}"
     try:
         p = _media_out_path(out_path, dest, "edit", prompt, ".png")
     except MediaError as exc:
@@ -557,8 +583,10 @@ _VIDEO_DESC = (
     "user configured one. It never produces a fake video file.")
 _EDIT_DESC = (
     "Edit or inpaint an existing image with a text prompt (optional mask "
-    "image for inpainting). COSTS MONEY via the OpenAI provider (paid API "
-    "key required). Returns the saved file path.")
+    "image for inpainting). The image and mask must live inside the agent "
+    "workspace; paths outside it are refused so the tool cannot exfiltrate "
+    "arbitrary files to the remote provider. COSTS MONEY via the OpenAI "
+    "provider (paid API key required). Returns the saved file path.")
 
 
 def media_tools(config: dict | None = None) -> list[Tool]:

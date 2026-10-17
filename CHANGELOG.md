@@ -3,6 +3,20 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.3] - 2026-10-17
+
+### Fixed
+- **Security: `edit_image` input files are now confined to the agent
+  workspace.** The `image` and `mask` arguments were resolved against the
+  raw filesystem, so a model could point the tool at an arbitrary file
+  (e.g. `~/.ssh/id_rsa`, `/etc/passwd`) and have its bytes exfiltrated to
+  the remote image-editing provider. Input paths are now confined exactly
+  like the file/shell tools: relative paths resolve against
+  `home/workspace`, absolute paths must already live inside it, and `..`
+  traversal or symlink escapes are refused with a clear error. Six new
+  tests in `tests/test_media.py` cover absolute-path, traversal, symlink,
+  and mask escapes plus inside-workspace acceptance.
+
 ## [0.6.2] - 2026-10-16
 
 ### Fixed
