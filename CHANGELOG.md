@@ -3,6 +3,22 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.4] - 2026-10-20
+
+### Fixed
+- **Security: `speak_text` output paths are now confined to the agent's
+  voice directory.** The low-risk `speak_text` tool accepted an
+  unconstrained `out_path`, so a model could point it at any
+  process-writable file (e.g. `~/.bashrc`) and have it overwritten with
+  synthesized audio bytes. Output paths are now confined exactly like
+  the media tools: relative paths resolve against `<home>/voice`,
+  absolute paths must already live inside it, and `..` traversal or
+  symlink escapes are refused with a clear error (surfaced as
+  `ERROR: ...` by the tool). The default output location is unchanged
+  (`<home>/voice/tts-<stamp>-<id>.wav`). Seven new tests in
+  `tests/test_voice.py` cover absolute-path, traversal, tilde, and
+  symlink escapes plus inside-voice-dir acceptance and the default path.
+
 ## [0.6.3] - 2026-10-17
 
 ### Fixed

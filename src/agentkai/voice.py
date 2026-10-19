@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Any
 
 from .tools import Tool
+from .media import agentkai_home
 
 __all__ = [
     "VoiceError",
@@ -56,6 +57,7 @@ __all__ = [
     "preprocess_voice_note",
     "provider_matrix",
     "voice_tools",
+    "voice_dir",
     "SUPPORTED_EXTENSIONS",
 ]
 
@@ -459,17 +461,59 @@ def select_tts(prefer: str = "auto",
         "See provider_matrix() for details.")
 
 
-def _default_out_path(extension: str) -> Path:
-    d = Path("~/.agentkai/voice").expanduser()
-    d.mkdir(parents=True, exist_ok=True)
+def _default_out_path(extension: str, home: Path | None = None) -> Path:
+    d = voice_dir(home)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
     return d / f"tts-{stamp}-{uuid.uuid4().hex[:8]}.{extension}"
 
 
+VOICE_DIR_NAME = "voice"
+
+
+def voice_dir(home: Path | None = None) -> Path:
+    """Directory where synthesized voice files live: ``<home>/voice``."""
+    d = (home or agentkai_home()) / VOICE_DIR_NAME
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _voice_out_path(out_path: str | Path | None,
+                    home: Path | None = None) -> Path | None:
+    """Resolve a caller-supplied TTS output path, confined to the voice dir.
+
+    Relative paths are joined to the voice dir; absolute paths must
+    already live inside it. The path is fully resolved (collapsing ``..``
+    and symlinks) and rejected with :class:`VoiceError` when it would land
+    outside the voice dir — the ``speak_text`` tool is low-risk and must
+    not become an arbitrary-file-overwrite primitive (a model could
+    otherwise point it at ``~/.bashrc`` or any other process-writable
+    file). Parent directories are created as needed. Returns ``None``
+    when no ``out_path`` was given, so the caller falls back to a
+    generated unique name.
+    """
+    if not out_path:
+        return None
+    dest = voice_dir(home)
+    p = Path(out_path).expanduser()
+    if not p.is_absolute():
+        p = dest / p
+    resolved = p.resolve()
+    if resolved != dest and dest.resolve() not in resolved.parents:
+        raise VoiceError(f"out_path escapes the voice dir: {out_path!r}")
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    return resolved
+
+
 def speak(text: str, voice: str | None = None,
           out_path: str | Path | None = None, prefer: str = "auto",
-          provider: TTSProvider | None = None) -> Path:
-    """Synthesize *text* to an audio file. Returns the file path."""
+          provider: TTSProvider | None = None,
+          home: Path | None = None) -> Path:
+    """Synthesize *text* to an audio file. Returns the file path.
+
+    ``out_path``, when given, is used as-is (callers passing untrusted
+    paths should resolve them with :func:`_voice_out_path` first);
+    otherwise a unique name is generated under ``<home>/voice``.
+    """
     if not text or not text.strip():
         raise VoiceError("nothing to speak: text is empty")
     if len(text) > MAX_TTS_CHARS:
@@ -477,8 +521,8 @@ def speak(text: str, voice: str | None = None,
             f"text is {len(text)} chars, over the {MAX_TTS_CHARS} char "
             f"limit — split it into smaller chunks")
     prov = select_tts(prefer, provider)
-    out = Path(out_path).expanduser() if out_path else _default_out_path(
-        prov.default_extension)
+    out = (_voice_out_path(out_path, home) if out_path
+           else _default_out_path(prov.default_extension, home))
     out.parent.mkdir(parents=True, exist_ok=True)
     return prov.synthesize(text, voice, out)
 
@@ -523,6 +567,7 @@ def voice_tools(config: dict | None = None) -> list[Tool]:
     tts_provider: TTSProvider | None = config.get("tts")
     stt_prefer: str = config.get("stt_prefer", "auto")
     tts_prefer: str = config.get("tts_prefer", "auto")
+    home = Path(config.get("home", "") or agentkai_home())
 
     def transcribe_audio(audio_path: str) -> str:
         """Transcribe an audio file (voice note, recording) to text."""
@@ -535,7 +580,8 @@ def voice_tools(config: dict | None = None) -> list[Tool]:
         path = speak(text,
                      voice=voice or None,
                      out_path=out_path or None,
-                     prefer=tts_prefer, provider=tts_provider)
+                     prefer=tts_prefer, provider=tts_provider,
+                     home=home)
         return {"audio_path": str(path), "voice": voice or "default"}
 
     return [
@@ -557,7 +603,11 @@ def voice_tools(config: dict | None = None) -> list[Tool]:
             name="speak_text",
             description=(
                 "Convert text to speech and save it as an audio file. "
-                "Returns the file path; send it back as a voice note."
+                "Returns the file path; send it back as a voice note. "
+                "The file is always written inside the agent's voice "
+                "directory (<home>/voice): relative out_path values "
+                "resolve there, and absolute paths outside it are "
+                "refused."
             ),
             json_schema={
                 "type": "object",

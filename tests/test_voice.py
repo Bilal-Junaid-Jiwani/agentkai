@@ -214,12 +214,71 @@ def test_transcribe_tool_uses_provider(fake_config, wav_file):
     assert tool.run(audio_path=str(wav_file)) == "transcribed text"
 
 
-def test_speak_tool_writes_file(fake_config, tmp_path):
-    tool = {t.name: t for t in voice.voice_tools(fake_config)}["speak_text"]
-    out = tmp_path / "out.wav"
-    result = tool.run(text="hello", out_path=str(out))
+def test_speak_tool_writes_file(tmp_path):
+    cfg = {"stt": FakeSTT("transcribed text"), "tts": FakeTTS(),
+           "home": str(tmp_path)}
+    tool = {t.name: t for t in voice.voice_tools(cfg)}["speak_text"]
+    result = tool.run(text="hello", out_path="out.wav")
+    out = tmp_path / "voice" / "out.wav"
     assert result["audio_path"] == str(out)
     assert out.exists()
+
+
+def test_speak_out_path_absolute_outside_rejected(tmp_path):
+    cfg = {"stt": FakeSTT(), "tts": FakeTTS(), "home": str(tmp_path)}
+    tool = {t.name: t for t in voice.voice_tools(cfg)}["speak_text"]
+    outside = tmp_path / "evil.wav"
+    result = tool.run(text="hello", out_path=str(outside))
+    assert isinstance(result, str) and "escapes the voice dir" in result
+    assert not outside.exists()
+
+
+def test_speak_out_path_traversal_rejected(tmp_path):
+    cfg = {"stt": FakeSTT(), "tts": FakeTTS(), "home": str(tmp_path)}
+    tool = {t.name: t for t in voice.voice_tools(cfg)}["speak_text"]
+    result = tool.run(text="hello", out_path="../evil.wav")
+    assert isinstance(result, str) and "escapes the voice dir" in result
+    assert not (tmp_path / "evil.wav").exists()
+
+
+def test_speak_out_path_tilde_outside_rejected(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    cfg = {"stt": FakeSTT(), "tts": FakeTTS(),
+           "home": str(tmp_path / "agenthome")}
+    tool = {t.name: t for t in voice.voice_tools(cfg)}["speak_text"]
+    result = tool.run(text="hello", out_path="~/.bashrc")
+    assert isinstance(result, str) and "escapes the voice dir" in result
+    assert not (tmp_path / ".bashrc").exists()
+
+
+def test_speak_out_path_symlink_escape_rejected(tmp_path):
+    cfg = {"stt": FakeSTT(), "tts": FakeTTS(), "home": str(tmp_path)}
+    link = tmp_path / "voice" / "link"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(tmp_path)  # voice/link -> tmp_path (outside voice dir)
+    tool = {t.name: t for t in voice.voice_tools(cfg)}["speak_text"]
+    result = tool.run(text="hello", out_path="link/evil.wav")
+    assert isinstance(result, str) and "escapes the voice dir" in result
+    assert not (tmp_path / "evil.wav").exists()
+
+
+def test_speak_out_path_absolute_inside_allowed(tmp_path):
+    cfg = {"stt": FakeSTT(), "tts": FakeTTS(), "home": str(tmp_path)}
+    tool = {t.name: t for t in voice.voice_tools(cfg)}["speak_text"]
+    inside = tmp_path / "voice" / "sub" / "ok.wav"
+    result = tool.run(text="hello", out_path=str(inside))
+    assert result["audio_path"] == str(inside)
+    assert inside.exists()
+
+
+def test_speak_default_path_in_voice_dir(tmp_path):
+    cfg = {"stt": FakeSTT(), "tts": FakeTTS(), "home": str(tmp_path)}
+    tool = {t.name: t for t in voice.voice_tools(cfg)}["speak_text"]
+    result = tool.run(text="hello")
+    p = Path(result["audio_path"])
+    assert p.parent == tmp_path / "voice"
+    assert p.suffix == ".wav"
+    assert p.exists()
 
 
 def test_tool_reports_errors_as_strings(fake_config, wav_file):
