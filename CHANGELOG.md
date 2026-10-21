@@ -3,6 +3,23 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.5] - 2026-10-21
+
+### Fixed
+- **Security: `transcribe_audio` input files are now confined to the
+  agent workspace.** The tool accepted an unconstrained `audio_path`,
+  so a model could point it at any audio file on the host (e.g. another
+  application's recordings) and have the transcript fed back to it. Input
+  paths are now confined exactly like the file/shell and media tools:
+  relative paths resolve against `<home>/workspace`, absolute paths must
+  already live inside it, and `..` traversal or symlink escapes are
+  refused with a clear error (surfaced as `ERROR: ...` by the tool).
+  The gateway hook `preprocess_voice_note` is unchanged: channels
+  download voice notes themselves and call it on the downloaded file.
+  Eight new tests in `tests/test_voice.py` cover absolute-path,
+  traversal, tilde, and symlink escapes, inside-workspace acceptance
+  (absolute and relative), and missing-file rejection.
+
 ## [0.6.4] - 2026-10-20
 
 ### Fixed

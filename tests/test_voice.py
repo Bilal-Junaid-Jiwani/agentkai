@@ -208,10 +208,15 @@ def test_voice_tools_registered(fake_config):
         assert t.to_openai_schema()["function"]["name"] == t.name
 
 
-def test_transcribe_tool_uses_provider(fake_config, wav_file):
-    tool = {t.name: t for t in voice.voice_tools(fake_config)}[
-        "transcribe_audio"]
-    assert tool.run(audio_path=str(wav_file)) == "transcribed text"
+def test_transcribe_tool_uses_provider(tmp_path):
+    cfg = {"stt": FakeSTT("transcribed text"), "tts": FakeTTS(),
+           "home": str(tmp_path)}
+    ws = tmp_path / "workspace"
+    ws.mkdir(parents=True, exist_ok=True)
+    wav = ws / "note.wav"
+    wav.write_bytes(b"RIFF" + b"\x00" * 44)
+    tool = {t.name: t for t in voice.voice_tools(cfg)}["transcribe_audio"]
+    assert tool.run(audio_path=str(wav)) == "transcribed text"
 
 
 def test_speak_tool_writes_file(tmp_path):
@@ -281,11 +286,80 @@ def test_speak_default_path_in_voice_dir(tmp_path):
     assert p.exists()
 
 
-def test_tool_reports_errors_as_strings(fake_config, wav_file):
+def test_transcribe_in_path_absolute_outside_rejected(tmp_path):
+    cfg = {"stt": FakeSTT(), "tts": FakeTTS(), "home": str(tmp_path)}
+    tool = {t.name: t for t in voice.voice_tools(cfg)}["transcribe_audio"]
+    outside = tmp_path / "secret.wav"
+    outside.write_bytes(b"RIFF" + b"\x00" * 44)
+    result = tool.run(audio_path=str(outside))
+    assert isinstance(result, str) and "escapes the agent workspace" in result
+
+
+def test_transcribe_in_path_traversal_rejected(tmp_path):
+    cfg = {"stt": FakeSTT(), "tts": FakeTTS(), "home": str(tmp_path)}
+    tool = {t.name: t for t in voice.voice_tools(cfg)}["transcribe_audio"]
+    result = tool.run(audio_path="../secret.wav")
+    assert isinstance(result, str) and "escapes the agent workspace" in result
+    assert not (tmp_path / "secret.wav").exists()
+
+
+def test_transcribe_in_path_tilde_outside_rejected(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    cfg = {"stt": FakeSTT(), "tts": FakeTTS(),
+           "home": str(tmp_path / "agenthome")}
+    tool = {t.name: t for t in voice.voice_tools(cfg)}["transcribe_audio"]
+    result = tool.run(audio_path="~/.cache/secret.wav")
+    assert isinstance(result, str) and "escapes the agent workspace" in result
+
+
+def test_transcribe_in_path_symlink_escape_rejected(tmp_path):
+    cfg = {"stt": FakeSTT(), "tts": FakeTTS(), "home": str(tmp_path)}
+    ws = tmp_path / "workspace"
+    ws.mkdir(parents=True, exist_ok=True)
+    link = ws / "link"
+    link.symlink_to(tmp_path)  # workspace/link -> tmp_path (outside)
+    tool = {t.name: t for t in voice.voice_tools(cfg)}["transcribe_audio"]
+    result = tool.run(audio_path="link/secret.wav")
+    assert isinstance(result, str) and "escapes the agent workspace" in result
+
+
+def test_transcribe_in_path_absolute_inside_allowed(tmp_path):
+    cfg = {"stt": FakeSTT(), "tts": FakeTTS(), "home": str(tmp_path)}
+    tool = {t.name: t for t in voice.voice_tools(cfg)}["transcribe_audio"]
+    inside = tmp_path / "workspace" / "sub" / "note.wav"
+    inside.parent.mkdir(parents=True, exist_ok=True)
+    inside.write_bytes(b"RIFF" + b"\x00" * 44)
+    assert tool.run(audio_path=str(inside)) == "hello world"
+
+
+def test_transcribe_in_path_relative_resolves_to_workspace(tmp_path):
+    cfg = {"stt": FakeSTT("transcribed text"), "tts": FakeTTS(),
+           "home": str(tmp_path)}
+    ws = tmp_path / "workspace"
+    ws.mkdir(parents=True, exist_ok=True)
+    wav = ws / "note.wav"
+    wav.write_bytes(b"RIFF" + b"\x00" * 44)
+    tool = {t.name: t for t in voice.voice_tools(cfg)}["transcribe_audio"]
+    assert tool.run(audio_path="note.wav") == "transcribed text"
+
+
+def test_transcribe_in_path_missing_file_rejected(tmp_path):
+    cfg = {"stt": FakeSTT(), "tts": FakeTTS(), "home": str(tmp_path)}
+    tool = {t.name: t for t in voice.voice_tools(cfg)}["transcribe_audio"]
+    result = tool.run(audio_path="missing.wav")
+    assert isinstance(result, str) and "not found" in result
+
+
+def test_tool_reports_errors_as_strings(tmp_path):
     tools = voice.voice_tools(
-        {"stt": FakeSTT(fail=True), "tts": FakeTTS()})
+        {"stt": FakeSTT(fail=True), "tts": FakeTTS(),
+         "home": str(tmp_path)})
+    ws = tmp_path / "workspace"
+    ws.mkdir(parents=True, exist_ok=True)
+    wav = ws / "note.wav"
+    wav.write_bytes(b"RIFF" + b"\x00" * 44)
     tool = {t.name: t for t in tools}["transcribe_audio"]
-    result = tool.run(audio_path=str(wav_file))
+    result = tool.run(audio_path=str(wav))
     assert isinstance(result, str) and result.startswith("ERROR:")
 
 
@@ -303,12 +377,17 @@ def test_gate_ask_raises_approval(fake_config, wav_file):
         tool.run(_gate=lambda action: "ask", audio_path=str(wav_file))
 
 
-def test_gate_sees_tool_action(fake_config, wav_file):
+def test_gate_sees_tool_action(tmp_path):
     seen: list[dict] = []
-    tool = {t.name: t for t in voice.voice_tools(fake_config)}[
-        "transcribe_audio"]
+    cfg = {"stt": FakeSTT("transcribed text"), "tts": FakeTTS(),
+           "home": str(tmp_path)}
+    ws = tmp_path / "workspace"
+    ws.mkdir(parents=True, exist_ok=True)
+    wav = ws / "note.wav"
+    wav.write_bytes(b"RIFF" + b"\x00" * 44)
+    tool = {t.name: t for t in voice.voice_tools(cfg)}["transcribe_audio"]
     tool.run(_gate=lambda a: seen.append(a) or "allow",
-             audio_path=str(wav_file))
+             audio_path=str(wav))
     assert seen[0]["tool"] == "transcribe_audio"
     assert seen[0]["risk"] == "low"
 

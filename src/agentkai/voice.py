@@ -504,6 +504,35 @@ def _voice_out_path(out_path: str | Path | None,
     return resolved
 
 
+def _voice_in_path(audio_path: str | Path,
+                   home: Path | None = None) -> Path:
+    """Resolve a caller-supplied STT input file, confined to the workspace.
+
+    Relative paths resolve against ``<home>/workspace``; absolute paths
+    must already live inside it. The path is fully resolved (collapsing
+    ``..`` and symlinks) and rejected with :class:`VoiceError` when it
+    would land outside the workspace — the ``transcribe_audio`` tool is
+    low-risk and must not become a read primitive for private audio (a
+    model could otherwise point it at any audio file on the host — e.g.
+    another application's recordings — and have the transcript fed back
+    to it). Mirrors ``media._media_in_path``. Note this is only enforced
+    on the *tool*; :func:`preprocess_voice_note` stays unconfined because
+    channels download voice notes themselves before calling it.
+    """
+    root = (home or agentkai_home()) / "workspace"
+    root.mkdir(parents=True, exist_ok=True)
+    p = Path(audio_path).expanduser()
+    if not p.is_absolute():
+        p = root / p
+    resolved = p.resolve()
+    if resolved != root and root.resolve() not in resolved.parents:
+        raise VoiceError(
+            f"audio file escapes the agent workspace: {audio_path!r}")
+    if not resolved.is_file():
+        raise VoiceError(f"audio file not found: {audio_path!r}")
+    return resolved
+
+
 def speak(text: str, voice: str | None = None,
           out_path: str | Path | None = None, prefer: str = "auto",
           provider: TTSProvider | None = None,
@@ -570,8 +599,14 @@ def voice_tools(config: dict | None = None) -> list[Tool]:
     home = Path(config.get("home", "") or agentkai_home())
 
     def transcribe_audio(audio_path: str) -> str:
-        """Transcribe an audio file (voice note, recording) to text."""
-        return transcribe(audio_path, prefer=stt_prefer,
+        """Transcribe an audio file (voice note, recording) to text.
+
+        The path is confined to the agent workspace (see
+        :func:`_voice_in_path`): absolute paths outside it and
+        ``..``/symlink escapes are refused with ``"ERROR: ..."``.
+        """
+        resolved = _voice_in_path(audio_path, home)
+        return transcribe(resolved, prefer=stt_prefer,
                           provider=stt_provider)
 
     def speak_text(text: str, voice: str = "",

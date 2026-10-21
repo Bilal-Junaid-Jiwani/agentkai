@@ -43,6 +43,14 @@ mp3, wav, m4a, ogg/oga, opus, flac, webm, aac. Non-wav input is converted
 to 16 kHz mono wav via ffmpeg when available; otherwise the tool errors
 clearly.
 
+## Path confinement
+
+`transcribe_audio` only accepts audio files inside the agent workspace
+(`~/.agentkai/workspace`): absolute paths outside it and `..`/symlink
+escapes are refused, so the tool can't be used to read private audio from
+elsewhere on the machine. `speak_text` outputs are likewise confined to
+the voice dir (`~/.agentkai/voice`).
+
 ## Voice notes in chat
 
 Messaging channels download incoming voice-note files and transcribe them
