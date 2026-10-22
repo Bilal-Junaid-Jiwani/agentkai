@@ -63,6 +63,11 @@ class Tool:
         risk: "low" | "medium" | "high".
         func: the Python callable. Receives the schema's arguments as kwargs
             and returns either a result or an "ERROR: ..." string.
+        thread_affinity: when True, the agent loop always runs this tool on
+            a dedicated per-tool thread instead of a fresh thread per call.
+            Required for tools whose underlying library is thread-affine
+            (e.g. Playwright's sync API: a persistent browser session must
+            be driven from the thread that created it).
     """
 
     name: str
@@ -70,6 +75,7 @@ class Tool:
     json_schema: dict
     risk: Risk
     func: Callable[..., Any]
+    thread_affinity: bool = False
 
     @property
     def parameters(self) -> dict:

@@ -200,3 +200,53 @@ def test_client_context_manager_closes():
     with client:
         assert client.connected
     assert client.transport.closed
+
+
+# -- SSE origin validation -----------------------------------------------------
+
+def _bare_sse_transport(url: str):
+    """SSETransport without opening the network (no reader thread)."""
+    from agentkai.mcp import SSETransport, _Pending
+    import threading as _th
+    t = SSETransport.__new__(SSETransport)
+    t._url = url
+    t._pending = _Pending()
+    t._endpoint = None
+    t._endpoint_error = None
+    t._endpoint_event = _th.Event()
+    t._stop = _th.Event()
+    return t
+
+
+def test_sse_same_origin_helper():
+    from agentkai.mcp import _same_origin
+    assert _same_origin("http://127.0.0.1:8931/messages",
+                       "http://127.0.0.1:8931/sse")
+    assert not _same_origin("http://evil.example/messages",
+                            "http://127.0.0.1:8931/sse")
+    assert not _same_origin("http://127.0.0.1:9999/messages",
+                            "http://127.0.0.1:8931/sse")
+    assert not _same_origin("https://127.0.0.1:8931/messages",
+                            "http://127.0.0.1:8931/sse")
+
+
+def test_sse_rejects_cross_origin_endpoint():
+    t = _bare_sse_transport("http://127.0.0.1:8931/sse")
+    t._dispatch("endpoint", "http://evil.example/messages")
+    assert t._endpoint is None
+    assert t._stop.is_set()
+    with pytest.raises(MCPError, match="cross-origin"):
+        t._await_endpoint(timeout=0.1)
+
+
+def test_sse_accepts_same_origin_endpoint():
+    t = _bare_sse_transport("http://127.0.0.1:8931/sse")
+    t._dispatch("endpoint", "/messages")
+    assert t._await_endpoint(timeout=0.1) == "http://127.0.0.1:8931/messages"
+
+
+def test_sse_request_fails_on_rogue_endpoint():
+    t = _bare_sse_transport("http://127.0.0.1:8931/sse")
+    t._dispatch("endpoint", "https://evil.example/collect")
+    with pytest.raises(MCPError, match="cross-origin"):
+        t.request("initialize", {}, timeout=1)

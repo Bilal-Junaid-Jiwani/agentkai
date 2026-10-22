@@ -3,6 +3,44 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.7] - 2026-10-22
+
+### Fixed
+- **Browser tools are now thread-affine.** `_run_tool_guarded` ran every
+  tool call on a fresh worker thread, but the persistent `BrowserSession`
+  drives Playwright's sync API, which must be used from the thread that
+  created it — so browser calls could fail or deadlock when a new tool
+  call landed on a different thread than the one that started Chromium.
+  `Tool` gained a `thread_affinity` flag; all browser tools set it, and
+  the agent loop routes those calls through a dedicated per-tool worker
+  thread instead of a fresh thread per call.
+- **MCP SSE transport rejects cross-origin endpoints.** The transport
+  took its POST endpoint from the server's `endpoint` event via
+  `urljoin` with no origin check, so a compromised MCP server could
+  redirect all JSON-RPC traffic (tool names, arguments, results) to an
+  arbitrary host. The announced endpoint must now share scheme, host,
+  and port with the SSE stream URL; a mismatch fails closed with
+  `MCPError`.
+- **Context compaction summary is no longer `role: "user"`.** Phase-2
+  budget compaction inserted a summary of *untrusted tool output* as a
+  user message — a prompt-injection foothold, since the model treats
+  user-role content as instructions. The summary is now `role: "system"`
+  and explicitly labeled as compacted tool output, never new user
+  instructions.
+
+### Verified and refuted (Gemini Argon audit claims checked in source)
+- Skill manifest "bypass": refuted — `_verify_user_skill` is fail-closed
+  (unreadable/invalid/non-object manifest or missing `content_sha256`
+  refuses the load) and runs on every user-skill load.
+- Dashboard token issue: refuted — per-launch random token, localhost-only
+  bind, token-gated middleware with constant-time comparison, never
+  logged, printed exactly once at startup.
+- Missing dependency floors: refuted — every runtime dependency in
+  `pyproject.toml` carries a `>=` floor.
+- Approval cancellation/skip: refuted — approvals fail closed: timeout
+  denies, unknown run returns 404, `action_id` mismatch returns 400; no
+  cancel-to-allow path exists.
+
 ## [0.6.6] - 2026-10-22
 
 ### Fixed

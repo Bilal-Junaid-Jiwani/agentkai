@@ -608,7 +608,11 @@ def browser_tools(session: BrowserSession) -> list[Tool]:
     def _back() -> dict:
         return session.back()
 
-    return [
+    # Playwright's sync API is thread-affine: the shared BrowserSession must
+    # be driven from the thread that created it. Flag every tool so the
+    # agent loop routes their calls through a dedicated per-tool thread
+    # (see Agent._run_tool_guarded) instead of a fresh thread per call.
+    tools = [
         Tool(
             name="browser_goto",
             description=(
@@ -697,3 +701,6 @@ def browser_tools(session: BrowserSession) -> list[Tool]:
             func=_back,
         ),
     ]
+    for t in tools:
+        t.thread_affinity = True
+    return tools

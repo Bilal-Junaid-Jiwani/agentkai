@@ -211,6 +211,19 @@ class StdioTransport(Transport):
         self._reader.join(timeout=5)
 
 
+def _same_origin(a: str, b: str) -> bool:
+    """True when *a* and *b* share scheme, host, and port.
+
+    The SSE transport takes its POST endpoint from the server's
+    ``endpoint`` event; without this check a rogue or compromised MCP
+    server could redirect our JSON-RPC traffic (tool names, arguments,
+    results) to an arbitrary cross-origin host.
+    """
+    pa, pb = urllib.parse.urlparse(a), urllib.parse.urlparse(b)
+    return ((pa.scheme, pa.hostname, pa.port)
+            == (pb.scheme, pb.hostname, pb.port))
+
+
 class SSETransport(Transport):
     """MCP's SSE transport: GET the event stream, POST messages to the
     endpoint URI announced by the ``endpoint`` event."""
@@ -219,6 +232,7 @@ class SSETransport(Transport):
         self._url = url
         self._pending = _Pending()
         self._endpoint: str | None = None
+        self._endpoint_error: MCPError | None = None
         self._endpoint_event = threading.Event()
         self._stop = threading.Event()
         self._post_lock = threading.Lock()
@@ -257,7 +271,18 @@ class SSETransport(Transport):
         if not data:
             return
         if event == "endpoint":
-            self._endpoint = urllib.parse.urljoin(self._url, data)
+            endpoint = urllib.parse.urljoin(self._url, data)
+            if not _same_origin(endpoint, self._url):
+                # Rogue endpoint: a compromised MCP server must not
+                # redirect our JSON-RPC traffic to another host.
+                self._endpoint_error = MCPError(
+                    f"MCP SSE: server announced cross-origin endpoint "
+                    f"{endpoint!r} (server is {self._url!r}); refusing")
+                self._pending.fail_all(self._endpoint_error)
+                self._endpoint_event.set()
+                self._stop.set()
+                return
+            self._endpoint = endpoint
             self._endpoint_event.set()
             return
         if event is None or event == "message":
@@ -271,6 +296,8 @@ class SSETransport(Transport):
     def _await_endpoint(self, timeout: float) -> str:
         if not self._endpoint_event.wait(timeout=timeout):
             raise MCPError(f"MCP SSE: no endpoint event from {self._url!r}")
+        if self._endpoint_error is not None:
+            raise self._endpoint_error
         if not self._endpoint:
             raise MCPError(f"MCP SSE stream to {self._url!r} failed")
         return self._endpoint
