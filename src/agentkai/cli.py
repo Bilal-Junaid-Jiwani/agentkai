@@ -232,8 +232,13 @@ def scheduler_add(
                    err=True)
         raise typer.Exit(code=2)
     sched = _get_scheduler()
-    sched.add(Job(name=name, schedule=schedule, command=command,
-                  prompt=prompt, model_alias=model, job_type=job_type))
+    try:
+        sched.add(Job(name=name, schedule=schedule, command=command,
+                      prompt=prompt, model_alias=model, job_type=job_type))
+    except ValueError as exc:
+        typer.echo(f"bad schedule {schedule!r}: {exc}", err=True)
+        sched.close()
+        raise typer.Exit(code=2)
     typer.echo(f"added job {name!r} [{job_type}] schedule={schedule}")
     sched.close()
 

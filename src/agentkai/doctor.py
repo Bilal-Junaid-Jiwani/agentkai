@@ -1,9 +1,10 @@
 """`agentkai doctor`: environment diagnostics.
 
 Read-only checks that verify a setup without starting anything: the agent
-home directory, the config file, provider API keys, the scheduler database,
-the memory tree, the tool registry, image media providers, and the bundled
-dashboard static assets.
+home directory, the config file, provider API keys, the model layer
+(LiteLLM + its runtime imports), the scheduler database, the memory tree,
+the tool registry, image media providers, and the bundled dashboard
+static assets.
 
 Prints one line per check — ``[OK]``, ``[WARN]``, or ``[FAIL]`` — and exits
 with code 1 when anything FAILs. Doctor never writes anything except to a
@@ -65,6 +66,7 @@ def run_checks(home: Path | None = None) -> list[Check]:
     add("home", lambda: _check_home(home))
     add("config", lambda: _check_config(home))
     add("providers", lambda: _check_providers(home))
+    add("litellm", _check_model_layer)
     add("scheduler", lambda: _check_scheduler(home))
     add("memory", lambda: _check_memory(home))
     add("tools", _check_tools)
@@ -120,6 +122,33 @@ def _check_providers(home: Path) -> Check:
                      f"({default}) has no API key — "
                      f"set the key before running. Models: {note}")
     return Check("providers", "ok", f"default key set. Models: {note}")
+
+
+def _check_model_layer() -> Check:
+    """The model stack must import cleanly in this environment.
+
+    LiteLLM's tool-calling path imports ``mcp.types`` at call time, not at
+    ``import litellm`` time — before 0.6.6 ``mcp`` was an undeclared
+    dependency, so a fresh install passed every import check here yet
+    ``agentkai run`` died with "all models failed: No module named 'mcp'".
+    Probe the exact imports the run path performs so a broken or partial
+    install is diagnosable up front.
+    """
+    try:
+        import litellm  # noqa: F401
+        import mcp.types  # noqa: F401
+    except Exception as exc:  # noqa: BLE001 - doctor reports, never raises
+        return Check("litellm", "fail",
+                     f"model layer import failed: {type(exc).__name__}: "
+                     f"{exc} — reinstall with: "
+                     "pip install --force-reinstall agentkai")
+    try:
+        from importlib.metadata import version
+        detail = (f"litellm {version('litellm')}, mcp {version('mcp')} "
+                  "import cleanly")
+    except Exception:  # noqa: BLE001 - version strings are decoration
+        detail = "litellm + mcp import cleanly"
+    return Check("litellm", "ok", detail)
 
 
 def _check_scheduler(home: Path) -> Check:

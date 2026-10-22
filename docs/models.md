@@ -57,7 +57,10 @@ Environment always wins over the file. Keys are **never printed or logged** —
 Each alias has a fallback chain: if the primary model errors (rate limit,
 outage, bad key), the request retries on the next model in the chain
 automatically. The chain is defined per alias in the provider module; your
-custom aliases in `config.yaml` can set their own.
+custom aliases in `config.yaml` can set their own. When the whole chain
+fails, the error lists each model's own failure in chain order — the
+primary's error first — so the model that actually broke is the one you
+see, not whichever fallback happened to be last.
 
 ## Capabilities
 

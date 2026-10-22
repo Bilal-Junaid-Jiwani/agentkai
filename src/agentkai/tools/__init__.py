@@ -167,11 +167,102 @@ def _resolve_in_roots(path: str, roots: list[Path]) -> Path:
     )
 
 
-def _is_dangerous(command: str) -> str | None:
+_SHELLS = {"sh", "bash", "zsh", "dash", "fish", "ksh", "ash"}
+_SEPARATORS = {";", "&&", "||", "|", "&"}
+# curl/wget output piped straight into a shell: the classic remote-code
+# one-liner. The shell name must be the piped command word, so a pipe into
+# e.g. sha256sum does not match.
+_PIPE_TO_SHELL = re.compile(
+    r"\b(?:curl|wget)\b[^|]*\|\s*(?:sudo\s+)?[\w./-]*"
+    r"(?:sh|bash|zsh|dash|fish|ksh)\b")
+
+
+def _basename(tok: str) -> str:
+    return tok.rsplit("/", 1)[-1]
+
+
+def _is_root_or_home(tok: str) -> bool:
+    """True for ``/``, ``~``, ``$HOME`` — and their ``/*`` wipe forms."""
+    t = tok.strip("\"'")
+    norm = t.rstrip("/") or "/"
+    if norm in ("/", "~", "$HOME", "${HOME}", str(Path.home())):
+        return True
+    return t in ("/*", "~/*", "$HOME/*", "${HOME}/*",
+                 str(Path.home()) + "/*")
+
+
+def _args_until_separator(tokens: list[str], start: int) -> list[str]:
+    """Tokens from *start* up to (not including) the next shell separator."""
+    out: list[str] = []
+    for tok in tokens[start:]:
+        if tok in _SEPARATORS:
+            break
+        out.append(tok)
+    return out
+
+
+def _rm_reason(tokens: list[str]) -> str | None:
+    """Recursive rm aimed at / or the home dir — however rm is spelled.
+
+    Matches ``rm`` by basename so ``/bin/rm`` and ``sudo /bin/rm`` are
+    caught too; precise about targets so `rm -rf ./build` passes.
+    """
+    for i, tok in enumerate(tokens):
+        if _basename(tok) != "rm":
+            continue
+        args = _args_until_separator(tokens, i + 1)
+        recursive = any(
+            t == "--recursive"
+            or (t.startswith("-") and not t.startswith("--")
+                and "r" in t[1:])
+            for t in args)
+        targets = [t for t in args if not t.startswith("-")]
+        if recursive and any(_is_root_or_home(t) for t in targets):
+            return "recursive delete of / or home directory"
+    return None
+
+
+def _find_reason(tokens: list[str]) -> str | None:
+    """``find / -delete`` (or -exec over / or home) wipes by search root."""
+    for i, tok in enumerate(tokens):
+        if _basename(tok) != "find":
+            continue
+        args = _args_until_separator(tokens, i + 1)
+        if not any(t in ("-delete", "-exec", "-execdir") for t in args):
+            continue
+        paths = [t for t in args if not t.startswith("-")]
+        if any(_is_root_or_home(p) for p in paths):
+            return "find deleting from / or home directory"
+    return None
+
+
+def _nested_reason(tokens: list[str], depth: int) -> str | None:
+    """Rescan payloads handed to a nested shell (``bash -c '...'``, eval)."""
+    if depth >= 3:
+        return None
+    for i, tok in enumerate(tokens):
+        if _basename(tok) in _SHELLS and i + 2 < len(tokens) \
+                and tokens[i + 1] == "-c":
+            reason = _is_dangerous(tokens[i + 2], depth + 1)
+            if reason:
+                return reason
+        if tok == "eval" and i + 1 < len(tokens):
+            payload = " ".join(_args_until_separator(tokens, i + 1))
+            reason = _is_dangerous(payload, depth + 1)
+            if reason:
+                return reason
+    return None
+
+
+def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     """Blocklist scan. Returns a reason string, or None if the command passes.
 
     This is a blocklist, not a sandbox: it stops the obvious footguns, not a
-    determined adversary. Real isolation belongs in a container layer.
+    determined adversary. The permission gate is the real protection, and
+    real isolation belongs in a container layer. The scan is spelling-aware
+    (``/bin/rm`` counts as ``rm``), covers ``$HOME``/``~`` targets, recurses
+    into nested ``sh -c``/``eval`` payloads, and catches ``find / -delete``
+    and download-piped-to-shell one-liners.
     """
     patterns = [
         (r":\(\)\s*\{", "fork bomb"),
@@ -185,26 +276,14 @@ def _is_dangerous(command: str) -> str | None:
     for pattern, reason in patterns:
         if re.search(pattern, command):
             return reason
-    # rm with -r on / or ~ : check tokens precisely so `rm -rf ./build` passes.
+    if _PIPE_TO_SHELL.search(command):
+        return "download piped to a shell"
     try:
         tokens = shlex.split(command, posix=True)
     except ValueError:
         return None  # unparseable; the shell will report the syntax error
-    for i, tok in enumerate(tokens):
-        if tok == "rm" and i + 1 < len(tokens):
-            rest = tokens[i + 1 :]
-            recursive = any(
-                t.startswith("-") and "r" in t and not t.startswith("--")
-                for t in rest
-                if t.startswith("-")
-            ) or "--recursive" in rest
-            targets = [t for t in rest if not t.startswith("-")]
-            if recursive and any(
-                (t.rstrip("/") or "/") in ("/", "~") or t in ("/*", "~/*")
-                for t in targets
-            ):
-                return "recursive delete of / or ~"
-    return None
+    return (_rm_reason(tokens) or _find_reason(tokens)
+            or _nested_reason(tokens, _depth))
 
 
 # ---- built-in tool implementations -----------------------------------------
@@ -474,8 +553,9 @@ def default_registry(
         name="exec",
         description=(
             "Run a shell command on the agent's computer and get output. "
-            "Working directory defaults to the agent workspace and cannot "
-            "escape the allowed roots. Obviously destructive commands are blocked."
+            "The working directory is confined to the allowed roots, but "
+            "the command itself is NOT sandboxed: a destructive-command "
+            "blocklist and the permission gate are the protections."
         ),
         json_schema={
             "type": "object",

@@ -240,6 +240,14 @@ class LLMMessage:
     usage: dict = field(default_factory=dict)
 
 
+def _one_line(exc: BaseException, limit: int = 160) -> str:
+    """Collapse an exception to one compact line for error chains."""
+    text = " ".join(str(exc).split()) or type(exc).__name__
+    if len(text) > limit:
+        text = text[: limit - 1].rstrip() + "…"
+    return text
+
+
 def _parse_args(raw: str) -> tuple[dict, str]:
     """Parse a tool-call arguments string; never raise."""
     if not raw:
@@ -353,9 +361,13 @@ class LLMClient:
 
         Streams internally so ``on_delta`` receives text incrementally;
         returns the fully assembled :class:`LLMMessage`. Retries once per
-        fallback model on failure.
+        fallback model on failure. When the whole chain fails, the raised
+        error lists each model's own failure in chain order — the primary's
+        error leads, so a bad primary key is never masked by a fallback's
+        unrelated complaint.
         """
         last_exc: Exception | None = None
+        failures: list[tuple[str, Exception]] = []
         for attempt, model in enumerate(self.models_tried()):
             try:
                 return self._generate_once(
@@ -365,11 +377,14 @@ class LLMClient:
                 raise
             except Exception as exc:  # noqa: BLE001 - fallbacks need this
                 last_exc = exc
+                failures.append((model, exc))
                 if attempt < len(self.models_tried()) - 1:
                     continue  # try the next model in the chain
                 tried = ", ".join(self.models_tried())
+                detail = "; ".join(
+                    f"{m}: {_one_line(e)}" for m, e in failures)
                 raise RuntimeError(
-                    f"all models failed [{tried}]: {exc}") from exc
+                    f"all models failed [{tried}]: {detail}") from exc
         raise last_exc or RuntimeError("no models configured")
 
     def stream(self, messages: list[dict], tools: list[dict] | None = None,

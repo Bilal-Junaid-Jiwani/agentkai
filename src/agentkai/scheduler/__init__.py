@@ -179,6 +179,21 @@ def parse_at(schedule: str) -> datetime:
     return dt
 
 
+def validate_schedule(schedule: str) -> None:
+    """Raise ValueError unless *schedule* is a runnable cron or @at: spec.
+
+    ``Scheduler.add`` calls this so every entry path (CLI, dashboard API,
+    direct use) rejects garbage like ``"not a cron"`` at add time instead
+    of storing a job that can never fire.
+    """
+    if not schedule or not schedule.strip():
+        raise ValueError("schedule is empty")
+    if schedule.startswith("@at:"):
+        parse_at(schedule)
+    else:
+        parse_cron(schedule)
+
+
 # -- heartbeat / dreaming prompts --------------------------------------------
 
 def build_heartbeat_prompt(heartbeat_path: str | Path = HEARTBEAT_PATH,
@@ -315,6 +330,7 @@ class Scheduler:
     # -- CRUD ------------------------------------------------------------
 
     def add(self, job: Job) -> None:
+        validate_schedule(job.schedule)
         with self._lock:
             self.conn.execute(
                 "INSERT OR REPLACE INTO jobs "

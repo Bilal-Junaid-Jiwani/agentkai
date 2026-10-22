@@ -362,6 +362,27 @@ def test_generate_raises_after_chain_exhausted():
         assert model in str(exc_info.value)
 
 
+def test_generate_error_reports_each_models_own_failure():
+    """The chain error must quote every model's own error, primary first.
+
+    Regression: only the LAST provider's error was surfaced, so a bad
+    Anthropic key on the primary showed up as "OpenAI credentials missing"
+    from the tail of the chain — actively misleading.
+    """
+    def down(model, messages, tools=None, stream=True, **kwargs):
+        raise RuntimeError(f"boom from {model}")
+
+    client = LLMClient(model="claude", completion_fn=down)
+    with pytest.raises(RuntimeError, match="all models failed") as exc_info:
+        client.generate([{"role": "user", "content": "hi"}])
+    text = str(exc_info.value)
+    for model in client.models_tried():
+        assert f"{model}: boom from {model}" in text
+    # the primary's failure leads the detail, not the last fallback's
+    primary = client.models_tried()[0]
+    assert text.index(f"{primary}: boom") < text.index("gpt-4o: boom")
+
+
 def test_generate_without_fallbacks_raises_on_first_failure():
     """Aliases with an empty chain (e.g. "local") fail fast, unchanged."""
     def down(model, messages, tools=None, stream=True, **kwargs):

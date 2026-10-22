@@ -31,8 +31,14 @@ Plus capability modules that add their own tools:
 File and shell tools are **root-scoped**: paths are resolved (symlinks
 included) and must stay inside the allowed roots — `..` escapes and symlink
 tricks are rejected. `exec` additionally refuses obviously destructive
-commands (`rm -rf /`, disk wipes, fork bombs). This is a blocklist, not a
-sandbox: it stops accidents and casual abuse, not a determined attacker.
+commands (`rm -rf /`, disk wipes, fork bombs) — including spelling
+variants such as `/bin/rm -rf $HOME`, payloads nested in `sh -c '...'`,
+`find / -delete`, and downloads piped into a shell (`curl ... | sh`). This
+is a blocklist, not a sandbox: it stops accidents and casual abuse, not a
+determined attacker. The command runs with your shell's full permissions
+(only its working directory is confined), so the **permission gate** —
+which asks before `exec` runs — is the real protection. For untrusted
+prompts or unattended use, run agentkai inside a container or VM.
 `fetch_url` refuses non-HTTP(S) URLs, embedded credentials, and non-public
 hosts, and re-validates every redirect hop. The browser's `browser_goto`
 enforces the same non-public-host boundary at navigation time, and a

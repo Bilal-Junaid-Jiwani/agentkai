@@ -22,7 +22,7 @@ Verify:
 
 ```bash
 agentkai --help
-agentkai doctor   # checks config, keys, scheduler DB, memory, tools, media
+agentkai doctor   # checks config, keys, model imports, scheduler DB, memory, tools, media
 ```
 
 ## 2. Pick a model (BYOK)

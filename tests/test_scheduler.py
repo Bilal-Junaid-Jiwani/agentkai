@@ -126,6 +126,33 @@ def test_add_list_remove_persist(tmp_path):
     s2.close()
 
 
+def test_add_rejects_garbage_schedule(tmp_path):
+    """add() validates eagerly: a job that can never fire is refused."""
+    s = Scheduler(db=tmp_path / "sched.db")
+    for bad in ("not a cron", "", "   ", "* * * *", "61 * * * *",
+                "0 0 32 1 *", "0 0 * 13 *", "@at:not-a-date", "@at:"):
+        with pytest.raises(ValueError):
+            s.add(Job(name="bad", schedule=bad, prompt="x"))
+    assert s.list() == []  # nothing was stored
+    s.add(Job(name="ok", schedule="0 2 * * *", prompt="x"))
+    s.add(Job(name="once", schedule="@at:2026-10-01T09:00", prompt="x"))
+    assert {j.name for j in s.list()} == {"ok", "once"}
+    s.close()
+
+
+def test_cli_scheduler_add_rejects_garbage_schedule(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli_mod, "_get_scheduler",
+                        lambda: Scheduler(db=tmp_path / "cli.db"))
+    runner = typer.testing.CliRunner()
+    r = runner.invoke(cli_mod.app, ["scheduler", "add", "bad",
+                                    "--schedule", "not a cron",
+                                    "--prompt", "tidy up"])
+    assert r.exit_code == 2, r.output
+    assert "bad schedule" in r.output
+    r = runner.invoke(cli_mod.app, ["scheduler", "list"])
+    assert "bad" not in r.output
+
+
 def test_migrates_v0_database(tmp_path):
     db = tmp_path / "old.db"
     conn = sqlite3.connect(str(db))

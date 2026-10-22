@@ -6,10 +6,11 @@ Start here:
 agentkai doctor
 ```
 
-It checks the config file, provider keys, scheduler database, memory
-tree, tool registry, image media providers, and the bundled dashboard
-assets, then prints one `[OK]`/`[WARN]`/`[FAIL]` line per check (exit
-code 1 when anything fails). `--json` gives a machine-readable report.
+It checks the config file, provider keys, the model layer (LiteLLM and
+its runtime imports), the scheduler database, memory tree, tool
+registry, image media providers, and the bundled dashboard assets, then
+prints one `[OK]`/`[WARN]`/`[FAIL]` line per check (exit code 1 when
+anything fails). `--json` gives a machine-readable report.
 
 ## Install / CLI
 
@@ -20,6 +21,12 @@ run it with) and check `~/.local/bin` is on PATH.
 **Import errors after install** — you may have installed into a
 different Python than the one running `agentkai`. Use one venv and
 install inside it.
+
+**`all models failed ... No module named 'mcp'`** — a partial or stale
+install: LiteLLM imports the `mcp` package on its tool-calling path, and
+releases before 0.6.6 did not declare it. Run `agentkai doctor` (the
+`litellm` check probes exactly these imports), then upgrade:
+`pip install -U agentkai`.
 
 ## Models
 

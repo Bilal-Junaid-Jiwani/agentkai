@@ -72,7 +72,7 @@ to whichever model you choose, on your own machine.
 | `agentkai run PROMPT` | run one agent task with live streaming output |
 | `agentkai chat PROMPT` | send one prompt, print the final answer |
 | `agentkai models` | show model aliases and what they resolve to |
-| `agentkai doctor` | check the setup: config, provider keys, scheduler DB, memory, tools, media providers, dashboard assets (exits 1 on any [FAIL]) |
+| `agentkai doctor` | check the setup: config, provider keys, model layer imports, scheduler DB, memory, tools, media providers, dashboard assets (exits 1 on any [FAIL]) |
 | `agentkai runs list/show RUN_ID` | inspect past runs from the event log: status, model, tools, full replay |
 | `agentkai dashboard` | launch the local web dashboard (127.0.0.1 only, token-secured) |
 | `agentkai gateway` | run the messaging gateway daemon (Telegram/Discord/WebChat/WhatsApp) |
@@ -124,7 +124,7 @@ offline. Same agent, same tools underneath.
 [Privacy](https://github.com/Bilal-Junaid-Jiwani/agentkai/blob/main/docs/privacy.md) ·
 [Troubleshooting](https://github.com/Bilal-Junaid-Jiwani/agentkai/blob/main/docs/troubleshooting.md)
 
-Honest scope note: this is early-stage software (v0.3.0). Core flows —
+Honest scope note: this is early-stage software (v0.6.6). Core flows —
 agent runs, tools, memory, scheduler, dashboard, channels — are
 implemented and tested. Areas marked **experimental** in the docs are
 real code with real limits; they are labeled, not hidden.

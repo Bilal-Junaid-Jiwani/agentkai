@@ -41,6 +41,11 @@ agentkai scheduler run-due                  # run everything currently due
 agentkai scheduler remove remind-call
 ```
 
+Schedules are validated when a job is added — an expression that is not
+a valid 5-field cron spec (or a valid `--at` datetime) is rejected with
+an error instead of being stored as a job that could never fire. The
+same validation applies to jobs created through the dashboard API.
+
 ## Safety: unattended jobs can't ask
 
 A scheduled job runs without you watching, so it can **never prompt**.

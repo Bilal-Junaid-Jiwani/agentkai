@@ -27,15 +27,35 @@ def _scrub_keys(monkeypatch):
     monkeypatch.delenv("AGENTKAI_IMAGE_PROVIDER", raising=False)
 
 
-def test_run_checks_returns_eight_named_checks(tmp_path, monkeypatch):
+def test_run_checks_returns_nine_named_checks(tmp_path, monkeypatch):
     _scrub_keys(monkeypatch)
     checks = run_checks(tmp_path)
     assert [c.name for c in checks] == [
-        "home", "config", "providers", "scheduler",
+        "home", "config", "providers", "litellm", "scheduler",
         "memory", "tools", "media", "dashboard",
     ]
     assert all(isinstance(c, Check) for c in checks)
     assert all(c.status in ("ok", "warn", "fail") for c in checks)
+
+
+def test_model_layer_check_ok_when_imports_work(tmp_path, monkeypatch):
+    _scrub_keys(monkeypatch)
+    checks = {c.name: c for c in run_checks(tmp_path)}
+    assert checks["litellm"].status == "ok"
+    assert "import cleanly" in checks["litellm"].detail
+
+
+def test_model_layer_check_fails_when_mcp_missing(tmp_path, monkeypatch):
+    """Regression: before 0.6.6 a missing `mcp` package only surfaced as
+    "all models failed" on the first run; doctor must flag it up front."""
+    import sys
+    _scrub_keys(monkeypatch)
+    monkeypatch.setitem(sys.modules, "mcp", None)
+    monkeypatch.setitem(sys.modules, "mcp.types", None)
+    checks = {c.name: c for c in run_checks(tmp_path)}
+    assert checks["litellm"].status == "fail"
+    assert "import failed" in checks["litellm"].detail
+    assert has_failures(run_checks(tmp_path))
 
 
 def test_first_run_home_is_all_warns_no_fails(tmp_path, monkeypatch):
@@ -118,7 +138,7 @@ def test_format_text_and_json(tmp_path, monkeypatch):
     assert text.splitlines()[-1].endswith("fail")
     assert "[OK] tools:" in text
     data = json.loads(format_json(checks))
-    assert len(data["checks"]) == 8
+    assert len(data["checks"]) == 9
     assert data["checks"][0]["name"] == "home"
 
 
@@ -128,7 +148,7 @@ def test_cli_doctor_exit_zero(tmp_path, monkeypatch):
     runner = typer.testing.CliRunner()
     result = runner.invoke(cli_mod.app, ["doctor"])
     assert result.exit_code == 0, result.output
-    assert "8 checks:" in result.output
+    assert "9 checks:" in result.output
 
 
 def test_cli_doctor_exit_one_on_failure(tmp_path, monkeypatch):

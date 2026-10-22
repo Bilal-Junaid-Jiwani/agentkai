@@ -4,13 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentkai"
-version = "0.6.5"
+version = "0.6.6"
 description = "Open-source personal AI agent — model-agnostic, with tools, memory, scheduler and a local dashboard"
 readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
 dependencies = [
-    "litellm>=1.60",
+    "litellm>=1.60,<2.0",
+    "mcp>=2.2,<3",         # litellm's tool-calling path imports mcp.types at runtime; undeclared before 0.6.6, which broke fresh installs
     "typer>=0.9",
     "rich>=13",
     "fastapi>=0.110",

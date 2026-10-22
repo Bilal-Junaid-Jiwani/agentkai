@@ -3,6 +3,47 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.6] - 2026-10-22
+
+### Fixed
+- **Critical: `agentkai run` works again on a fresh install.** Releases
+  through 0.6.5 declared `litellm>=1.60` with no upper bound and never
+  declared `mcp`, but LiteLLM's tool-calling path imports `mcp.types`
+  at call time — so a clean `pip install agentkai` produced an
+  install where every run died with "all models failed ... No module
+  named 'mcp'". `mcp>=2.2,<3` is now a declared dependency (matching
+  LiteLLM's own requirement for that code path) and LiteLLM is capped
+  at `<2.0`. `agentkai doctor` gained a `litellm` check that probes
+  exactly these imports, so a partial install is diagnosable up front
+  instead of at first run. New `scripts/smoke_install.py` installs the
+  built wheel into a clean venv and proves the run path reaches the
+  model stage — the class of check that would have caught this.
+- **Fallback-chain errors tell the truth.** When every model in a chain
+  failed, only the LAST provider's error was surfaced — a bad Anthropic
+  key on the primary showed up as "OpenAI credentials missing" from the
+  tail of the chain. The error now lists each model's own failure in
+  chain order (primary first), each collapsed to one line.
+- **`exec` blocklist hardening (still a blocklist, not a sandbox).**
+  The destructive-command scan now matches `rm` by basename (`/bin/rm
+  -rf /` slipped past), treats `$HOME`/`${HOME}` like `~`, recurses
+  into nested `sh -c '...'` / `eval` payloads, and blocks
+  `find / -delete` and download-piped-to-shell one-liners
+  (`curl ... | sh`). Docs and the tool description now state plainly
+  that the command itself is not sandboxed, the permission gate is the
+  real protection, and a container/VM is the right home for untrusted
+  or unattended use. Regression tests cover every named bypass plus
+  near-miss commands that must stay allowed (`rm -rf ./build`,
+  `curl ... | sha256sum`).
+- **Scheduler refuses garbage schedules at add time.** `Scheduler.add`
+  never validated, and the CLI path didn't either — a job with schedule
+  `"not a cron"` was happily stored and could never fire. `add()` now
+  validates cron and `@at:` schedules (the dashboard API already did),
+  and the CLI reports a clean `bad schedule ...` error with exit 2.
+- **Docs caught up with the code.** README and the docs index still
+  called the software "v0.3.0"; both now say v0.6.6, and the doctor /
+  scheduler / models / tools pages describe the checks, validation,
+  error format, and exec safety model as they actually are.
+
 ## [0.6.5] - 2026-10-21
 
 ### Fixed
