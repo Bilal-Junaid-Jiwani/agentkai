@@ -156,6 +156,42 @@ def test_exec_blocklist_bypasses(reg):
         assert result.startswith("ERROR:") and "blocked" in result, cmd
 
 
+def test_exec_blocklist_dot_segment_spellings(reg):
+    """Dot-segment path spellings the shell resolves to / or home.
+
+    ``rm -rf /./`` is ``rm -rf /`` once the shell resolves the path — the
+    old literal tuple check missed every one of these (verified against
+    ``_is_dangerous`` before the fix).
+    """
+    for cmd in ("rm -rf /./",
+                "rm -rf /../",
+                "rm -rf /.",
+                "rm -rf /..",
+                "rm -rf ///",
+                "rm -rf /././",
+                "rm -rf /./*",
+                "rm -rf /a/../",
+                "sudo rm -rf /./",
+                "bash -c 'rm -rf /../'",
+                "find /./ -delete",
+                "find /../ -name x -delete"):
+        result = reg.get("exec").run(command=cmd)
+        assert isinstance(result, str), cmd
+        assert result.startswith("ERROR:") and "blocked" in result, cmd
+
+
+def test_exec_blocklist_dot_segment_precision():
+    """Dot-segment spellings that are NOT / or home must stay allowed."""
+    from agentkai.tools import _is_dangerous
+    for cmd in ("rm -rf /./build",
+                "rm -rf /tmp/../var/tmp/x",
+                "rm -rf $HOME/../shared",
+                "rm -rf ~/../shared",
+                "rm -rf ~/..//",
+                "find /var/tmp -name '*.pyc' -delete"):
+        assert _is_dangerous(cmd) is None, cmd
+
+
 def test_is_dangerous_allows_lookalikes():
     """Near-miss commands that must NOT be blocked."""
     from agentkai.tools import _is_dangerous

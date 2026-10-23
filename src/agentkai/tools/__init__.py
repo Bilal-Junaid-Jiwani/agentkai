@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import posixpath
 import re
 import shlex
 import signal
@@ -187,14 +188,43 @@ def _basename(tok: str) -> str:
     return tok.rsplit("/", 1)[-1]
 
 
+def _normalize_path_spelling(tok: str) -> str:
+    """Collapse dot segments / repeated separators the way the shell will.
+
+    The shell resolves ``//``, ``/./`` and ``/../`` before acting, so
+    ``rm -rf /./`` wipes ``/`` exactly like ``rm -rf /`` — but the raw
+    spelling misses every literal ``/``/home check. ``~``/``$HOME``/
+    ``${HOME}`` prefixes are expanded to the real home path first so
+    ``$HOME/..`` (the parent of home) is not confused with home itself.
+    Non-absolute tokens are returned untouched: a relative path can never
+    be ``/`` or the home directory.
+    """
+    t = tok
+    m = re.match(r"^(~|\$HOME|\$\{HOME\})", t)
+    if m:
+        t = str(Path.home()) + t[m.end():]
+    if not t.startswith("/"):
+        return t
+    norm = posixpath.normpath(t)
+    return "/" if norm == "//" else norm
+
+
 def _is_root_or_home(tok: str) -> bool:
-    """True for ``/``, ``~``, ``$HOME`` — and their ``/*`` wipe forms."""
+    """True for ``/``, ``~``, ``$HOME`` — and their ``/*`` wipe forms.
+
+    Path spellings are normalized first, so obfuscated roots like
+    ``rm -rf /./`` or ``rm -rf /../`` (which the shell resolves to ``/``)
+    cannot slip past the literal ``/`` check.
+    """
     t = tok.strip("\"'")
-    norm = t.rstrip("/") or "/"
-    if norm in ("/", "~", "$HOME", "${HOME}", str(Path.home())):
+    if not t:
+        return False
+    spell = _normalize_path_spelling(t)
+    base = spell.rstrip("/") or "/"
+    if base in ("/", "~", "$HOME", "${HOME}", str(Path.home())):
         return True
-    return t in ("/*", "~/*", "$HOME/*", "${HOME}/*",
-                 str(Path.home()) + "/*")
+    return spell in ("/*", "~/*", "$HOME/*", "${HOME}/*",
+                     str(Path.home()) + "/*")
 
 
 def _args_until_separator(tokens: list[str], start: int) -> list[str]:

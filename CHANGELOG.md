@@ -3,6 +3,22 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.8] - 2026-10-23
+
+### Fixed
+- **Exec blocklist: dot-segment path spellings can no longer bypass it.**
+  The blocklist matched ``rm`` targets against literal spellings of ``/``
+  and the home directory, but the shell resolves dot segments before
+  acting — so ``rm -rf /./`` and ``rm -rf /../`` (and the same spellings
+  behind ``sudo``, nested ``bash -c '...'`` payloads, and ``find`` search
+  roots) slipped straight through while doing exactly what ``rm -rf /``
+  does. ``_is_root_or_home`` now normalizes each target the way the shell
+  resolves it (``~``/``$HOME``/``${HOME}`` expanded, ``//``/``/./``/``/../``
+  collapsed via POSIX normalization) before comparing, so the obfuscated
+  spellings are caught too — without flagging near-misses like
+  ``rm -rf $HOME/../shared`` (the parent of home, not home). New
+  regression tests pin both the blocked spellings and the allowed ones.
+
 ## [0.6.7] - 2026-10-22
 
 ### Fixed
