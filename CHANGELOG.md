@@ -3,6 +3,20 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.9] - 2026-10-24
+
+### Fixed
+- **Failed forced skill reinstalls no longer delete the working skill.**
+  `install_skill(..., force=True)` removed the existing skill *before*
+  attempting the new install, so any failure (failed git clone, missing
+  `SKILL.md`, pin mismatch) left the user with no skill at all. The
+  existing install is now moved aside during the reinstall and restored
+  unchanged on failure; the backup is cleaned up on success. New
+  regression tests pin both the restore path and the success path.
+- **Honest scope note version drift.** `README.md` and `docs/index.md`
+  said "early-stage software (v0.6.6)" — two releases behind; both now
+  read v0.6.9.
+
 ## [0.6.8] - 2026-10-23
 
 ### Fixed

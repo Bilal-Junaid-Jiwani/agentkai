@@ -387,6 +387,9 @@ def install_skill(source: str, name: str | None = None,
     trust decision. ``pin`` checks out exactly this commit SHA after
     cloning (full 40-hex SHA required); the install fails if the commit
     cannot be fetched. Local-directory installs ignore ``pin``.
+
+    With ``force=True`` the existing skill is moved aside during the
+    reinstall and restored unchanged if the new install fails.
     """
     local_path = Path(source).expanduser()
     is_local = local_path.is_dir()
@@ -399,12 +402,20 @@ def install_skill(source: str, name: str | None = None,
             f"pass trust_remote=True (CLI: --trust-remote) to proceed")
     skill_name = _skill_name_from_source(source, name)
     dest = user_skills_dir() / skill_name
+    backup: Path | None = None
     if dest.exists():
         if not force:
             raise SkillError(
                 f"skill {skill_name!r} already installed at {dest} "
                 f"(use force=True to overwrite)")
-        shutil.rmtree(dest)
+        # Move the working skill aside instead of deleting it outright.
+        # If the reinstall below fails (bad clone, missing SKILL.md, pin
+        # mismatch), the previous install is restored — deleting first
+        # made a failed forced reinstall a one-way data-loss door.
+        backup = dest.parent / (dest.name + ".install-bak")
+        if backup.exists():
+            shutil.rmtree(backup, ignore_errors=True)
+        dest.replace(backup)
     dest.parent.mkdir(parents=True, exist_ok=True)
     try:
         if is_local:
@@ -450,7 +461,11 @@ def install_skill(source: str, name: str | None = None,
     except Exception:
         if dest.exists():
             shutil.rmtree(dest, ignore_errors=True)
+        if backup is not None and backup.exists():
+            backup.replace(dest)  # restore the previous working install
         raise
+    if backup is not None and backup.exists():
+        shutil.rmtree(backup, ignore_errors=True)
     return dest
 
 

@@ -175,6 +175,42 @@ def test_install_duplicate_needs_force(home_env, tmp_path):
     install_skill(str(src), force=True)  # overwrites fine
 
 
+def test_force_reinstall_failure_restores_previous(home_env, tmp_path):
+    # A failed forced reinstall must leave the previously-working skill
+    # untouched — not delete it and then raise.
+    src = _make_skill_dir(tmp_path)
+    dest = install_skill(str(src))
+    (dest / "data.txt").write_text("original working content")
+    bad = tmp_path / "not-a-skill"
+    bad.mkdir()
+    with pytest.raises(SkillError, match="no SKILL.md"):
+        install_skill(str(bad), name="myskill", force=True)
+    restored = home_env / "skills" / "myskill"
+    assert restored.is_dir()
+    assert (restored / "data.txt").read_text() == "original working content"
+    assert (restored / "SKILL.md").exists()
+    assert (restored / "manifest.json").exists()
+    leftovers = [p for p in (home_env / "skills").iterdir()
+                 if p.name.endswith(".install-bak")]
+    assert leftovers == []
+
+
+def test_force_reinstall_success_replaces_and_cleans_backup(home_env, tmp_path):
+    src = _make_skill_dir(tmp_path)
+    install_skill(str(src))
+    v2 = tmp_path / "myskill-v2"
+    v2.mkdir()
+    (v2 / "SKILL.md").write_text(
+        "---\nname: myskill\ndescription: test skill\nversion: 0.3.0\n---\nnew body\n")
+    dest = install_skill(str(v2), force=True)
+    assert SkillLoader().load("myskill").version == "0.3.0"
+    assert (dest / "SKILL.md").read_text().startswith(
+        "---\nname: myskill\ndescription: test skill\nversion: 0.3.0")
+    leftovers = [p for p in (home_env / "skills").iterdir()
+                 if p.name.endswith(".install-bak")]
+    assert leftovers == []
+
+
 def test_install_prefers_frontmatter_name(home_env, tmp_path):
     src = tmp_path / "some-dir-name"
     src.mkdir()
