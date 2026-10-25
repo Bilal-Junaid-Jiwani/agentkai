@@ -3,6 +3,27 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.10] - 2026-10-25
+
+### Fixed
+- **Exec blocklist: tilde-user and `${HOME<op>word}` spellings can no
+  longer bypass the home-directory guard.** The blocklist expanded only
+  bare `~` / `$HOME` / `${HOME}`, but the shell expands more spellings
+  of the same paths: `~user` resolves to that account's home (so
+  `rm -rf ~root` / `rm -rf ~<current-user>` wiped a home directory
+  while the checker normalized it to the nonsense path `<home>user`),
+  and `${HOME:-word}` / `${HOME-word}` expand to `$HOME` when it is set
+  (with `${HOME:=word}` / `${HOME:?word}` yielding `$HOME` too, and
+  `${HOME:+word}` yielding `word`). `_normalize_path_spelling` now
+  expands tilde-user via `pwd` lookup and all of these parameter
+  expansions before comparing, and the protected set is every account's
+  home directory, not just the current user's — so `find ~root
+  -delete` and nested-shell payloads are caught as well. Near-misses
+  stay allowed: unknown usernames (left literal by the shell),
+  `${HOME:+/tmp/foo}` (the word, not home), and subdirs of a home dir.
+  New regression tests pin both the blocked spellings and the allowed
+  ones.
+
 ## [0.6.9] - 2026-10-24
 
 ### Fixed

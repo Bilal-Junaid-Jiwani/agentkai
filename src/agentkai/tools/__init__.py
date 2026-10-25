@@ -196,35 +196,103 @@ def _normalize_path_spelling(tok: str) -> str:
     spelling misses every literal ``/``/home check. ``~``/``$HOME``/
     ``${HOME}`` prefixes are expanded to the real home path first so
     ``$HOME/..`` (the parent of home) is not confused with home itself.
+
+    Two more shell spellings of home that the old expansion missed:
+
+    - ``~user`` expands to that account's home (``pwd`` lookup), so
+      ``rm -rf ~root`` / ``rm -rf ~<current-user>`` wipes a home dir
+      while the old code normalized it to the nonsense path
+      ``<home>user``. An unknown username is left untouched: the shell
+      leaves it literal too, so ``rm`` fails harmlessly on it.
+    - ``${HOME:-word}`` / ``${HOME-word}`` expand to ``$HOME`` when it
+      is set (the normal case), and ``${HOME:+word}`` / ``${HOME+word}``
+      expand to ``word``; ``${HOME:=word}`` / ``${HOME:?word}`` (and
+      their ``-`` forms) yield ``$HOME`` when it is set. Each is
+      expanded the same way before the protected-path comparison.
+
     Non-absolute tokens are returned untouched: a relative path can never
     be ``/`` or the home directory.
     """
     t = tok
-    m = re.match(r"^(~|\$HOME|\$\{HOME\})", t)
-    if m:
-        t = str(Path.home()) + t[m.end():]
+    if t.startswith("${HOME"):
+        # ${HOME<op>word} parameter expansion; HOME is set in practice.
+        rest = t[len("${HOME"):]
+        for op in (":-", "-", ":+", "+", ":=", "=", ":?", "?"):
+            if not rest.startswith(op):
+                continue
+            end = rest.find("}", len(op))
+            if end == -1:
+                break
+            word = rest[len(op):end]
+            suffix = rest[end + 1:]
+            if op in (":-", "-", ":=", "=", ":?", "?"):
+                t = str(Path.home()) + suffix
+            else:  # :+ / + : the word itself, when HOME is set
+                t = word + suffix
+            break
+        else:
+            m = re.match(r"^\$\{HOME\}", t)
+            if m:
+                t = str(Path.home()) + t[m.end():]
+    elif t.startswith("~"):
+        m = re.match(r"^~([^/]*)(/.*)?$", t)
+        if m:
+            name, rest = m.group(1), m.group(2) or ""
+            if name == "":
+                t = str(Path.home()) + rest
+            else:
+                try:
+                    import pwd
+
+                    t = pwd.getpwnam(name).pw_dir + rest
+                except Exception:  # noqa: BLE001 - unknown user: left literal
+                    pass
+    else:
+        m = re.match(r"^\$HOME", t)
+        if m:
+            t = str(Path.home()) + t[m.end():]
     if not t.startswith("/"):
         return t
     norm = posixpath.normpath(t)
     return "/" if norm == "//" else norm
 
 
+def _home_dirs() -> set[str]:
+    """Every account home directory on this machine, plus $HOME.
+
+    The blocklist protects "the home directory", and the shell can spell
+    *any* account's home via ``~user`` — so the protected set is every
+    passwd entry's home, not just the current user's. Unknown on
+    non-POSIX platforms: falls back to $HOME alone.
+    """
+    homes = {str(Path.home())}
+    try:
+        import pwd
+
+        homes.update(entry.pw_dir for entry in pwd.getpwall())
+    except Exception:  # noqa: BLE001 - pwd missing or unreadable: $HOME only
+        pass
+    return homes
+
+
 def _is_root_or_home(tok: str) -> bool:
-    """True for ``/``, ``~``, ``$HOME`` — and their ``/*`` wipe forms.
+    """True for ``/``, any account home — and their ``/*`` wipe forms.
 
     Path spellings are normalized first, so obfuscated roots like
     ``rm -rf /./`` or ``rm -rf /../`` (which the shell resolves to ``/``)
-    cannot slip past the literal ``/`` check.
+    cannot slip past the literal ``/`` check, and ``~user`` / ``${HOME}``
+    parameter-expansion spellings of a home dir are caught too.
     """
     t = tok.strip("\"'")
     if not t:
         return False
     spell = _normalize_path_spelling(t)
     base = spell.rstrip("/") or "/"
-    if base in ("/", "~", "$HOME", "${HOME}", str(Path.home())):
+    protected = {"/"} | _home_dirs()
+    if base in protected:
         return True
-    return spell in ("/*", "~/*", "$HOME/*", "${HOME}/*",
-                     str(Path.home()) + "/*")
+    return spell == "/*" or any(
+        spell == home + "/*" for home in protected if home != "/")
 
 
 def _args_until_separator(tokens: list[str], start: int) -> list[str]:

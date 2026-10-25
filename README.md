@@ -124,7 +124,7 @@ offline. Same agent, same tools underneath.
 [Privacy](https://github.com/Bilal-Junaid-Jiwani/agentkai/blob/main/docs/privacy.md) ·
 [Troubleshooting](https://github.com/Bilal-Junaid-Jiwani/agentkai/blob/main/docs/troubleshooting.md)
 
-Honest scope note: this is early-stage software (v0.6.9). Core flows —
+Honest scope note: this is early-stage software (v0.6.10). Core flows —
 agent runs, tools, memory, scheduler, dashboard, channels — are
 implemented and tested. Areas marked **experimental** in the docs are
 real code with real limits; they are labeled, not hidden.

@@ -180,6 +180,48 @@ def test_exec_blocklist_dot_segment_spellings(reg):
         assert result.startswith("ERROR:") and "blocked" in result, cmd
 
 
+def test_exec_blocklist_home_expansion_spellings(reg):
+    """Tilde-user and ${HOME<op>word} spellings of a home directory.
+
+    ``~user`` expands to that account's home and ``${HOME:-word}`` /
+    ``${HOME-word}`` expand to ``$HOME`` when it is set, so both wipe a
+    home dir while the old expansion normalized them to harmless-looking
+    tokens (``<home>user`` / untouched ``${HOME:-...}`` — verified
+    against ``_is_dangerous`` before the fix).
+    """
+    import os
+    import pwd
+
+    me = pwd.getpwuid(os.getuid()).pw_name
+    for cmd in (f"rm -rf ~{me}",
+                "rm -rf ~root",
+                "rm -rf ~root/",
+                "rm -rf ~root/..",
+                "rm -rf ${HOME:-/tmp}",
+                "rm -rf ${HOME-/tmp}",
+                "rm -rf ${HOME:=/tmp}",
+                "rm -rf ${HOME:?oops}",
+                "rm -rf ${HOME:+/}",
+                "rm -rf ~root/*",
+                "sudo rm -rf ~root",
+                "bash -c 'rm -rf ${HOME:-/tmp}'",
+                "find ~root -delete",
+                "find ${HOME:-/tmp} -delete"):
+        result = reg.get("exec").run(command=cmd)
+        assert isinstance(result, str), cmd
+        assert result.startswith("ERROR:") and "blocked" in result, cmd
+
+
+def test_exec_blocklist_home_expansion_precision():
+    """Home-expansion lookalikes that are NOT a home dir stay allowed."""
+    from agentkai.tools import _is_dangerous
+    for cmd in ("rm -rf ~nosuchuserxyz123",       # unknown user: literal
+                "rm -rf ${HOME:+/tmp/foo}",       # alternate form: the word
+                "rm -rf ${HOME:-/tmp}/x",         # home + subdir, not home
+                "rm -rf ~root/project/build"):    # subdir of a home dir
+        assert _is_dangerous(cmd) is None, cmd
+
+
 def test_exec_blocklist_dot_segment_precision():
     """Dot-segment spellings that are NOT / or home must stay allowed."""
     from agentkai.tools import _is_dangerous
