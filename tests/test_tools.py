@@ -212,6 +212,40 @@ def test_exec_blocklist_home_expansion_spellings(reg):
         assert result.startswith("ERROR:") and "blocked" in result, cmd
 
 
+def test_exec_blocklist_home_container_spellings(reg):
+    """The directory holding the homes, and star chains over guarded dirs.
+
+    ``rm -rf /home`` (or ``$HOME/..`` / ``~/..``, which resolve to it)
+    deletes every home inside it, so it is guarded just like a home
+    itself — the old check allowed it, treating "parent of home" as a
+    near-miss, even though it already blocked ``~root/..`` whose parent
+    is ``/``. Likewise ``/home/*`` expands to all homes at once and
+    ``/*/*`` / ``$HOME/*/*`` wipe the contents of a guarded dir, so
+    pure-star chains under a guarded dir are blocked too (verified
+    against ``_is_dangerous`` before the fix).
+    """
+    import posixpath
+    from pathlib import Path
+
+    parent = posixpath.dirname(str(Path.home()))
+    assert parent not in ("", "/"), "test assumes homes live under a dir"
+    for cmd in (f"rm -rf {parent}",
+                f"rm -rf {parent}/*",
+                f"rm -rf {parent}/*/*",
+                "rm -rf $HOME/..",
+                "rm -rf ~/..",
+                "rm -rf ~/..//",
+                "rm -rf /*/*",
+                "rm -rf $HOME/*/*",
+                f"sudo rm -rf {parent}",
+                "bash -c 'rm -rf $HOME/..'",
+                f"find {parent} -delete",
+                f"find {parent}/* -delete"):
+        result = reg.get("exec").run(command=cmd)
+        assert isinstance(result, str), cmd
+        assert result.startswith("ERROR:") and "blocked" in result, cmd
+
+
 def test_exec_blocklist_home_expansion_precision():
     """Home-expansion lookalikes that are NOT a home dir stay allowed."""
     from agentkai.tools import _is_dangerous
@@ -223,13 +257,21 @@ def test_exec_blocklist_home_expansion_precision():
 
 
 def test_exec_blocklist_dot_segment_precision():
-    """Dot-segment spellings that are NOT / or home must stay allowed."""
+    """Dot-segment spellings that are NOT / or home must stay allowed.
+
+    Note ``~/..//`` is deliberately NOT here any more: it resolves to
+    the directory holding every home, which is guarded (see
+    ``test_exec_blocklist_home_container_spellings``). A *sibling* of
+    the homes such as ``$HOME/../shared`` stays allowed, as does a star
+    under a named subdir (``$HOME/project/*``) — only pure-star chains
+    directly under a guarded dir are blocked.
+    """
     from agentkai.tools import _is_dangerous
     for cmd in ("rm -rf /./build",
                 "rm -rf /tmp/../var/tmp/x",
                 "rm -rf $HOME/../shared",
                 "rm -rf ~/../shared",
-                "rm -rf ~/..//",
+                "rm -rf $HOME/project/*",
                 "find /var/tmp -name '*.pyc' -delete"):
         assert _is_dangerous(cmd) is None, cmd
 

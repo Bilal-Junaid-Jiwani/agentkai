@@ -197,7 +197,10 @@ def _normalize_path_spelling(tok: str) -> str:
     ``${HOME}`` prefixes are expanded to the real home path first so
     ``$HOME/..`` (the parent of home) is not confused with home itself.
 
-    Two more shell spellings of home that the old expansion missed:
+    Two more shell spellings of home that the old expansion missed
+    (the ``..`` handling below is normalization only: ``$HOME/..``
+    resolves to the parent of home, which ``_is_root_or_home`` guards
+    separately because that parent holds every home):
 
     - ``~user`` expands to that account's home (``pwd`` lookup), so
       ``rm -rf ~root`` / ``rm -rf ~<current-user>`` wipes a home dir
@@ -276,12 +279,28 @@ def _home_dirs() -> set[str]:
 
 
 def _is_root_or_home(tok: str) -> bool:
-    """True for ``/``, any account home — and their ``/*`` wipe forms.
+    """True for ``/``, any account home — and their wipe forms.
 
     Path spellings are normalized first, so obfuscated roots like
     ``rm -rf /./`` or ``rm -rf /../`` (which the shell resolves to ``/``)
     cannot slip past the literal ``/`` check, and ``~user`` / ``${HOME}``
     parameter-expansion spellings of a home dir are caught too.
+
+    Two spellings the old check missed, both verified against
+    ``_is_dangerous`` before this fix:
+
+    - The directory *containing* the homes. ``rm -rf /home`` (spelled
+      directly, or as ``$HOME/..`` / ``~/..``) deletes every home inside
+      it, so the parent of a home counts as guarded — unlike a sibling
+      such as ``/home/shared``, which stays allowed. This also
+      generalizes the already-blocked ``~root/..`` (whose parent is
+      ``/``) to ordinary homes, whose parent is ``/home``.
+    - Pure-star chains under a guarded dir. ``/home/*`` expands to all
+      homes at once, ``/*/*`` to the contents of every top-level dir,
+      and ``$HOME/*/*`` to the contents of every home subdir — each is
+      a wipe of a guarded dir just as ``/*`` is a wipe of ``/``. Only
+      chains of bare ``*`` segments count: ``$HOME/project/*`` (a star
+      under a *named* subdir) stays allowed.
     """
     t = tok.strip("\"'")
     if not t:
@@ -289,10 +308,20 @@ def _is_root_or_home(tok: str) -> bool:
     spell = _normalize_path_spelling(t)
     base = spell.rstrip("/") or "/"
     protected = {"/"} | _home_dirs()
-    if base in protected:
+    parents = {
+        posixpath.dirname(home)
+        for home in protected
+        if home != "/" and posixpath.dirname(home) not in ("", "/")
+    }
+    guarded = protected | parents
+    if base in guarded:
         return True
-    return spell == "/*" or any(
-        spell == home + "/*" for home in protected if home != "/")
+    # Strip trailing /* segments: if what remains is a guarded dir, the
+    # glob wipes it (/*, /*/*, /home/*, /home/*/*, $HOME/*/*).
+    stripped = base
+    while stripped.endswith("/*"):
+        stripped = stripped[:-2] or "/"
+    return stripped in guarded
 
 
 def _args_until_separator(tokens: list[str], start: int) -> list[str]:

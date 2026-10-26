@@ -3,6 +3,26 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.11] - 2026-10-26
+
+### Fixed
+- **Exec blocklist: the directory holding the homes, and star chains
+  over guarded dirs, can no longer wipe every home at once.**
+  `_is_root_or_home` guarded `/` and each account home (plus their
+  `/*` forms), but `rm -rf /home` — spelled directly or as
+  `$HOME/..` / `~/..` — slipped through, even though deleting the
+  container destroys every home inside it (and `~root/..` was already
+  blocked, since its parent is `/`). The parent of each home now
+  counts as guarded too, as do pure-star chains under a guarded dir:
+  `/home/*` (all homes at once), `/home/*/*`, `/*/*`, and
+  `$HOME/*/*`. Precision is preserved: a sibling of the homes
+  (`$HOME/../shared`) and a star under a named subdir
+  (`$HOME/project/*`) stay allowed. New tests pin the blocked
+  spellings and the allowed ones; one old precision pin (`~/..//`)
+  moved to the blocked set, since it resolves to the home container.
+  `find ... -delete` and nested-shell payloads over these paths are
+  covered through the same check.
+
 ## [0.6.10] - 2026-10-25
 
 ### Fixed
