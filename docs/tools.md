@@ -32,7 +32,8 @@ File and shell tools are **root-scoped**: paths are resolved (symlinks
 included) and must stay inside the allowed roots — `..` escapes and symlink
 tricks are rejected. `exec` additionally refuses obviously destructive
 commands (`rm -rf /`, disk wipes, fork bombs) — including spelling
-variants such as `/bin/rm -rf $HOME`, payloads nested in `sh -c '...'`,
+variants such as `/bin/rm -rf $HOME`, glob and brace spellings of
+guarded paths (`/hom?`, `/{,}`), payloads nested in `sh -c '...'`,
 `find / -delete`, and downloads piped into a shell (`curl ... | sh`). This
 is a blocklist, not a sandbox: it stops accidents and casual abuse, not a
 determined attacker. The command runs with your shell's full permissions

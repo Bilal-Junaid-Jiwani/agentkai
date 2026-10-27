@@ -3,6 +3,28 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.12] - 2026-10-27
+
+### Fixed
+- **Exec blocklist: glob and brace spellings can no longer wipe `/`
+  or a home directory.** The shell expands globs and braces before
+  acting, so `rm -rf /hom?` is `rm -rf /home`, `/h*` matches
+  `/home`, `/home/?*` / `/home/[a-z]*` match every home, and
+  `/{,}` / `/home/{,}` brace-expand to `/` / `/home` — all of
+  these slipped past the old check, which only understood literal
+  paths and bare `*` chains. `_is_root_or_home` now brace-expands
+  the token and walks glob segments against the guarded set: a
+  pattern matching a guarded dir's name is blocked, a broad glob
+  (`*`, `?*`, `[!.]*`) directly under a guarded dir is blocked as
+  a wipe of that dir, and a glob chain under a guarded dir stays
+  blocked. Precision is preserved: a glob under a named subdir
+  (`$HOME/project/*`), a pattern matching no guarded name
+  (`/*.pyc`, `$HOME/*.log`), and a named tail under a glob-matched
+  parent (`/hom?/shared`, a sibling of the homes) stay allowed.
+  `find ... -delete` and nested-shell payloads over these spellings
+  are covered through the same check. New tests pin the blocked
+  spellings and the allowed ones.
+
 ## [0.6.11] - 2026-10-26
 
 ### Fixed

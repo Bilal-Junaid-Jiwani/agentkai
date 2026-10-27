@@ -246,6 +246,69 @@ def test_exec_blocklist_home_container_spellings(reg):
         assert result.startswith("ERROR:") and "blocked" in result, cmd
 
 
+def test_exec_blocklist_glob_and_brace_spellings(reg):
+    """Glob / brace spellings that expand to / or a home dir.
+
+    The shell expands globs and braces before acting, so ``/hom?`` is
+    ``/home``, ``/h*`` matches ``/home``, ``/home/?*`` /
+    ``/home/[a-z]*`` match every home, and ``/{,}`` / ``/home/{,}``
+    brace-expand to ``/`` / ``/home`` — the old check saw only the
+    literal spellings and allowed them all (verified against
+    ``_is_dangerous`` before the fix).
+    """
+    import posixpath
+    from pathlib import Path
+
+    parent = posixpath.dirname(str(Path.home()))
+    home_name = posixpath.basename(str(Path.home()))
+    assert parent not in ("", "/"), "test assumes homes live under a dir"
+    parent_base = posixpath.basename(parent)
+    parent_glob = parent_base[:-1] + "?"  # e.g. "home" -> "hom?"
+    for cmd in (f"rm -rf /{parent_glob}",
+                f"rm -rf /{parent_base[0]}*",
+                f"rm -rf {parent}/?*",
+                f"rm -rf {parent}/[a-z]*",
+                "rm -rf /{,}",
+                f"rm -rf {parent}/{{,}}",
+                f"rm -rf {parent}/{{{home_name},shared}}",
+                "rm -rf $HOME/?*",
+                "rm -rf ~/?*",
+                f"rm -rf /{parent_glob}/{home_name}",
+                f"rm -rf {parent}/*/*",
+                f"bash -c 'rm -rf /{parent_glob}'",
+                f"find /{parent_glob} -delete"):
+        result = reg.get("exec").run(command=cmd)
+        assert isinstance(result, str), cmd
+        assert result.startswith("ERROR:") and "blocked" in result, cmd
+
+
+def test_exec_blocklist_glob_precision():
+    """Glob spellings that do NOT reach / or a home dir stay allowed.
+
+    A glob under a named subdir (``$HOME/project/*``) was already
+    allowed and stays so; likewise a glob matching no guarded dir
+    name (``/*.pyc``), a named tail under a glob-matched parent
+    (``/hom?/shared`` is a sibling of the homes), and a glob tail
+    under a named subdir of a glob-matched parent.
+    """
+    import posixpath
+    from pathlib import Path
+
+    from agentkai.tools import _is_dangerous
+    parent = posixpath.dirname(str(Path.home()))
+    parent_base = posixpath.basename(parent)
+    parent_glob = parent_base[:-1] + "?"  # e.g. "home" -> "hom?"
+    for cmd in ("rm -rf $HOME/project/*",
+                "rm -rf /tmp/*",
+                "rm -rf /*.pyc",
+                "rm -rf $HOME/*.log",
+                f"rm -rf /{parent_glob}/shared",
+                f"rm -rf {parent}/*/project",
+                f"rm -rf {parent}/user/project/*",
+                "find /var/tmp -name '*.pyc' -delete"):
+        assert _is_dangerous(cmd) is None, cmd
+
+
 def test_exec_blocklist_home_expansion_precision():
     """Home-expansion lookalikes that are NOT a home dir stay allowed."""
     from agentkai.tools import _is_dangerous

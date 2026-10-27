@@ -20,6 +20,7 @@ Safety model (see research/ARCHITECTURE.md section 3):
 """
 from __future__ import annotations
 
+import fnmatch
 import ipaddress
 import os
 import posixpath
@@ -278,6 +279,160 @@ def _home_dirs() -> set[str]:
     return homes
 
 
+def _expand_braces(tok: str) -> list[str]:
+    """Expand ``{a,b}`` brace groups the way the shell does, before globbing.
+
+    Brace expansion runs before pathname expansion, so ``/{,}`` is ``/``
+    (twice) and ``/home/{hatch,shared}`` includes ``/home/hatch`` — both
+    slipped past the old check, which saw only the literal braces. Groups
+    without a comma (``{a}``) are literal in the shell and left alone,
+    as are escaped (``\\{``) and nested groups. Expansion is capped at
+    256 combinations: beyond that the token is returned unexpanded
+    rather than exploding.
+    """
+    out = [tok]
+    while True:
+        expanded: list[str] = []
+        changed = False
+        for s in out:
+            start = -1
+            i = 0
+            while i < len(s):
+                if s[i] == "\\":
+                    i += 2
+                    continue
+                if s[i] == "{":
+                    start = i
+                    break
+                i += 1
+            if start == -1:
+                expanded.append(s)
+                continue
+            depth = 0
+            end = -1
+            for j in range(start, len(s)):
+                if s[j] == "{":
+                    depth += 1
+                elif s[j] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        end = j
+                        break
+            if end == -1 or depth != 0:
+                expanded.append(s)
+                continue
+            inner = s[start + 1:end]
+            if "," not in inner or "{" in inner:
+                expanded.append(s)
+                continue
+            changed = True
+            for alt in inner.split(","):
+                expanded.append(s[:start] + alt + s[end + 1:])
+        out = expanded
+        if not changed:
+            return out
+        if len(out) > 256:
+            return [tok]
+
+
+def _has_glob(seg: str) -> bool:
+    return any(c in seg for c in "*?[")
+
+
+def _is_broad_glob(seg: str) -> bool:
+    """True if *seg* matches (essentially) every non-dot entry.
+
+    The shell's glob never matches dotfiles, so ``*`` wipes "every
+    entry" in exactly this sense — and ``?*`` / ``*?`` / ``*?*`` /
+    ``[!.]*`` match the same set: any name of length >= 1 not
+    starting with ``.``. A broad glob directly under a guarded dir
+    therefore wipes that dir just as ``*`` does (``$HOME/?*`` slipped
+    past the old check, which only understood bare ``*`` chains).
+    Narrower patterns (``[a-z]*``, ``*.pyc``, ``?``) match only a
+    subset and stay the caller's responsibility, like the allowed
+    ``$HOME/project/*``.
+    """
+    if seg.startswith("[!.]") or seg.startswith("[^.]"):
+        seg = seg[4:]
+    if not seg or any(c not in "*?" for c in seg):
+        return False
+    return "*" in seg and seg.count("?") <= 1
+
+
+def _guarded_dirs() -> set[str]:
+    """``/``, every account home, and the directory holding the homes."""
+    protected = {"/"} | _home_dirs()
+    parents = {
+        posixpath.dirname(home)
+        for home in protected
+        if home != "/" and posixpath.dirname(home) not in ("", "/")
+    }
+    return protected | parents
+
+
+def _glob_hits_guarded(spell: str) -> bool:
+    """True if a glob pattern in *spell* can delete a guarded dir.
+
+    The shell expands globs before acting, so a pattern that *can*
+    match a guarded dir is a wipe of it even though the literal
+    spelling names no guarded dir: ``/hom?`` matches ``/home``,
+    ``/h*`` matches ``/home``, and ``/home/?*`` / ``/home/[a-z]*``
+    match every home inside ``/home`` — all three slipped past the
+    old check, which only understood bare ``*`` chains. The walk
+    tracks only guarded-relevant expansions (a pattern under a
+    non-guarded dir can only become dangerous by matching a guarded
+    dir's name), so precision is preserved:
+
+    - A glob segment under a guarded dir followed only by further
+      globs wipes that dir's contents (``/home/*/*``, ``/*/*``) —
+      blocked. So does a *broad* glob directly under a guarded dir
+      (``$HOME/?*`` matches every non-dot home entry, exactly like
+      ``$HOME/*``) — while a trailing glob that matches a guarded
+      dir name there (``/home/[a-z]*`` matches every home) is
+      blocked for deleting the guarded dirs themselves. A pattern
+      matching no guarded name and no broad set (``/*.pyc``) stays
+      allowed.
+    - A glob segment under a guarded dir followed by a *named*
+      segment deletes a named subpath, not the dir (``/home/*/project``
+      is the glob analogue of the allowed ``$HOME/project/*``) — the
+      walk only continues if the pattern matches a guarded dir name
+      and the named tail lands on one (``/hom?/hatch`` blocked,
+      ``/hom?/shared`` allowed).
+    - A glob under a non-guarded dir that matches no guarded dir name
+      (``/tmp/*``, ``/home/user/project/*``) stays allowed.
+
+    Non-absolute tokens are returned untouched: a relative path can
+    never be ``/`` or the home directory.
+    """
+    if not spell.startswith("/"):
+        return False
+    guarded = _guarded_dirs()
+    segments = [s for s in spell.split("/") if s != ""]
+    current = {"/"}
+    for i, seg in enumerate(segments):
+        rest = segments[i + 1:]
+        if not _has_glob(seg):
+            current = {
+                posixpath.join(d, seg) if d != "/" else "/" + seg
+                for d in current
+            }
+            continue
+        nxt: set[str] = set()
+        for d in current:
+            if d in guarded and rest and all(_has_glob(s) for s in rest):
+                return True
+            if d in guarded and not rest and _is_broad_glob(seg):
+                return True
+            for g in guarded:
+                if posixpath.dirname(g) == d and fnmatch.fnmatchcase(
+                        posixpath.basename(g), seg):
+                    nxt.add(g)
+        current = nxt
+        if not current:
+            return False
+    return any(d in guarded for d in current)
+
+
 def _is_root_or_home(tok: str) -> bool:
     """True for ``/``, any account home — and their wipe forms.
 
@@ -301,27 +456,32 @@ def _is_root_or_home(tok: str) -> bool:
       a wipe of a guarded dir just as ``/*`` is a wipe of ``/``. Only
       chains of bare ``*`` segments count: ``$HOME/project/*`` (a star
       under a *named* subdir) stays allowed.
+    - Glob and brace spellings of a guarded dir. ``/hom?`` / ``/h*``
+      expand to ``/home``, ``/home/?*`` / ``/home/[a-z]*`` expand to
+      every home, and ``/{,}`` / ``/home/{,}`` brace-expand to ``/`` /
+      ``/home`` — all verified against ``_is_dangerous`` before this
+      fix. See ``_glob_hits_guarded`` / ``_expand_braces`` for the
+      precision rules (a glob under a named subdir stays allowed).
     """
     t = tok.strip("\"'")
     if not t:
         return False
-    spell = _normalize_path_spelling(t)
-    base = spell.rstrip("/") or "/"
-    protected = {"/"} | _home_dirs()
-    parents = {
-        posixpath.dirname(home)
-        for home in protected
-        if home != "/" and posixpath.dirname(home) not in ("", "/")
-    }
-    guarded = protected | parents
-    if base in guarded:
-        return True
-    # Strip trailing /* segments: if what remains is a guarded dir, the
-    # glob wipes it (/*, /*/*, /home/*, /home/*/*, $HOME/*/*).
-    stripped = base
-    while stripped.endswith("/*"):
-        stripped = stripped[:-2] or "/"
-    return stripped in guarded
+    guarded = _guarded_dirs()
+    for expansion in _expand_braces(t):
+        spell = _normalize_path_spelling(expansion)
+        base = spell.rstrip("/") or "/"
+        if base in guarded:
+            return True
+        # Strip trailing /* segments: if what remains is a guarded dir, the
+        # glob wipes it (/*, /*/*, /home/*, /home/*/*, $HOME/*/*).
+        stripped = base
+        while stripped.endswith("/*"):
+            stripped = stripped[:-2] or "/"
+        if stripped in guarded:
+            return True
+        if _glob_hits_guarded(spell):
+            return True
+    return False
 
 
 def _args_until_separator(tokens: list[str], start: int) -> list[str]:
