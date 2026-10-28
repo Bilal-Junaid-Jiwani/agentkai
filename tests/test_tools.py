@@ -282,6 +282,79 @@ def test_exec_blocklist_glob_and_brace_spellings(reg):
         assert result.startswith("ERROR:") and "blocked" in result, cmd
 
 
+def test_exec_blocklist_brace_sequence_and_home_substring_spellings(reg):
+    """Brace-sequence and ${HOME} substring / suffix-removal spellings.
+
+    The shell expands ``{a..z}`` / ``{1..10}`` brace sequences before
+    acting, so ``/hom{e..f}`` is ``/home`` (plus ``/homf``) and
+    ``/home/hat{c..d}h`` includes a home dir — the old check saw only
+    the literal braces and allowed them. Likewise ``${HOME:0:5}`` /
+    ``${HOME:0}`` substring-expand to the home container / home itself,
+    ``${HOME%/*}`` removes to ``/home``, and the space form
+    ``${HOME: -11}`` (one word in the shell, two tokens under shlex)
+    substring-expands to home itself — all verified against
+    ``_is_dangerous`` before the fix. ``${HOME%%/hatch}`` removes the
+    ``/hatch`` suffix, leaving ``/home``.
+    """
+    import posixpath
+    from pathlib import Path
+
+    parent = posixpath.dirname(str(Path.home()))
+    parent_base = posixpath.basename(parent)
+    home_name = posixpath.basename(str(Path.home()))
+    assert parent not in ("", "/"), "test assumes homes live under a dir"
+    assert parent_base[-1] == "e", "test assumes the homes dir ends in 'e'"
+    assert len(home_name) >= 2, "test assumes a multi-char home name"
+    # A brace sequence over the home name's last char that includes it.
+    last = home_name[-1]
+    if last.isalpha():
+        if last == "z":
+            home_seq = "{y..z}"
+        else:
+            home_seq = "{%s..%s}" % (last, chr(ord(last) + 1))
+    elif last.isdigit():
+        home_seq = "{8..9}" if last == "9" else "{%s..%s}" % (
+            last, str(int(last) + 1))
+    else:
+        home_seq = "{%s}" % last  # literal: not a sequence, kept harmless
+    home_len = len(str(Path.home()))
+    for cmd in (f"rm -rf /{parent_base[:-1]}{{e..f}}",
+                f"rm -rf {parent}/{home_name[:-1]}{home_seq}",
+                "rm -rf ${HOME%/*}",
+                "rm -rf ${HOME:0:5}",
+                "rm -rf ${HOME:0}",
+                f"rm -rf ${{HOME: -{home_len}}}",
+                f"rm -rf ${{HOME: -{home_len}:5}}",
+                f"rm -rf ${{HOME%%/{home_name}}}",
+                "bash -c 'rm -rf /hom{e..f}'",
+                "find ${HOME%/*} -delete",
+                "sudo rm -rf ${HOME:0:5}"):
+        result = reg.get("exec").run(command=cmd)
+        assert isinstance(result, str), cmd
+        assert result.startswith("ERROR:") and "blocked" in result, cmd
+
+
+def test_exec_blocklist_substring_removal_precision():
+    """Substring / removal lookalikes that are NOT a guarded dir stay allowed.
+
+    ``${HOME:+/tmp/foo}``-style alternate forms were already allowed;
+    likewise the removal / substring forms that land elsewhere:
+    ``${HOME%/*}/shared`` is a sibling of the homes, ``${HOME#*/}`` /
+    ``${HOME:1}`` are relative paths, ``${HOME%%/*}`` expands to empty
+    (no argument at all), and a brace sequence over a non-guarded dir
+    (``/tmp/{a..c}``) stays allowed.
+    """
+    from agentkai.tools import _is_dangerous
+    for cmd in ("rm -rf ${HOME%/*}/shared",
+                "rm -rf ${HOME#*/}",
+                "rm -rf ${HOME##*/}",
+                "rm -rf ${HOME%%/*}",
+                "rm -rf ${HOME:1}",
+                "rm -rf /tmp/{a..c}",
+                "rm -rf /tmp/{01..03}"):
+        assert _is_dangerous(cmd) is None, cmd
+
+
 def test_exec_blocklist_glob_precision():
     """Glob spellings that do NOT reach / or a home dir stay allowed.
 

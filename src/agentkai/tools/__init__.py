@@ -213,12 +213,72 @@ def _normalize_path_spelling(tok: str) -> str:
       expand to ``word``; ``${HOME:=word}`` / ``${HOME:?word}`` (and
       their ``-`` forms) yield ``$HOME`` when it is set. Each is
       expanded the same way before the protected-path comparison.
+    - ``${HOME:offset[:length]}`` substring expansion can spell a
+      guarded dir from a prefix of home: ``${HOME:0:5}`` is ``/home``
+      for a ``/home/<user>`` home, and ``${HOME:0}`` is home itself.
+      (``${HOME:-5}`` is the default-value form above, not a substring:
+      a negative substring offset needs the space, ``${HOME: -5}``.)
+    - ``${HOME%pat}`` / ``${HOME%%pat}`` suffix removal likewise
+      spells guarded dirs: ``${HOME%/*}`` is ``/home`` (the directory
+      holding every home) and ``${HOME%%/*}`` is empty. Prefix
+      removal (``${HOME#pat}`` / ``${HOME##pat}``) yields a relative
+      path (``home/<user>``), which stays out of scope exactly like
+      any other relative token.
 
     Non-absolute tokens are returned untouched: a relative path can never
     be ``/`` or the home directory.
     """
     t = tok
     if t.startswith("${HOME"):
+        # ${HOME:offset[:length]} substring expansion and ${HOME#/%pat}
+        # pattern removal are handled before the <op>word forms below:
+        # neither starts with one of those operators, so the loop would
+        # leave them untouched (and the shell would not).
+        m = re.match(r"^\$\{HOME:(?:(\d+)| +(-?\d+))(?:\: *(-?\d+))?\}",
+                     t)
+        if m:
+            home = str(Path.home())
+            offset = int(m.group(1) if m.group(1) is not None
+                         else m.group(2))
+            length = m.group(3)
+            if length is None:
+                t = home[offset:] + t[m.end():]
+            elif int(length) >= 0:
+                t = home[offset:offset + int(length)] + t[m.end():]
+            else:  # negative length: omit that many chars from the end
+                t = home[offset:int(length)] + t[m.end():]
+            if not t.startswith("/"):
+                return t
+            norm = posixpath.normpath(t)
+            return "/" if norm == "//" else norm
+        m = re.match(r"^\$\{HOME([#%])(\1)?([^\}]*)\}(.*)$", t)
+        if m:
+            op, double, pat = m.group(1), m.group(2), m.group(3)
+            suffix = m.group(4)
+            home = str(Path.home())
+            if op == "%":
+                # Shortest suffix match (longest kept) vs longest match.
+                rng = (range(len(home), -1, -1) if not double
+                       else range(0, len(home) + 1))
+                for k in rng:
+                    if fnmatch.fnmatchcase(home[k:], pat):
+                        t = home[:k] + suffix
+                        break
+                else:
+                    t = home + suffix
+            else:  # "#" prefix removal
+                rng = (range(0, len(home) + 1) if not double
+                       else range(len(home), -1, -1))
+                for k in rng:
+                    if fnmatch.fnmatchcase(home[:k], pat):
+                        t = home[k:] + suffix
+                        break
+                else:
+                    t = home + suffix
+            if not t.startswith("/"):
+                return t
+            norm = posixpath.normpath(t)
+            return "/" if norm == "//" else norm
         # ${HOME<op>word} parameter expansion; HOME is set in practice.
         rest = t[len("${HOME"):]
         for op in (":-", "-", ":+", "+", ":=", "=", ":?", "?"):
@@ -289,6 +349,14 @@ def _expand_braces(tok: str) -> list[str]:
     as are escaped (``\\{``) and nested groups. Expansion is capped at
     256 combinations: beyond that the token is returned unexpanded
     rather than exploding.
+
+    Sequence groups (``{a..z}``, ``{1..10}``, with an optional
+    ``..step``) expand the same way, and slipped past the old check
+    for the same reason: ``/hom{e..f}`` is ``/home`` (plus ``/homf``)
+    once the shell expands it, and ``/home/hat{c..d}h`` includes a
+    home dir. A zero step means step 1 in the shell and is treated
+    that way here; numbers are zero-padded when either endpoint has
+    a leading zero, as the shell pads them.
     """
     out = [tok]
     while True:
@@ -322,8 +390,52 @@ def _expand_braces(tok: str) -> list[str]:
                 expanded.append(s)
                 continue
             inner = s[start + 1:end]
-            if "," not in inner or "{" in inner:
+            if "{" in inner:
                 expanded.append(s)
+                continue
+            if "," not in inner:
+                seq = re.match(
+                    r"^(-?[a-zA-Z]|-?\d+)\.\.(-?[a-zA-Z]|-?\d+)"
+                    r"(?:\.\.(-?\d+))?$", inner)
+                alts: list[str] | None = None
+                if seq and ((len(seq.group(1)) == 1
+                             and len(seq.group(2)) == 1
+                             and seq.group(1).isalpha()
+                             and seq.group(2).isalpha())
+                            or (seq.group(1).lstrip("-").isdigit()
+                                and seq.group(2).lstrip("-").isdigit())):
+                    start_v, end_v = seq.group(1), seq.group(2)
+                    step = abs(int(seq.group(3))) if seq.group(3) else 1
+                    step = step or 1  # a zero step means step 1
+                    if start_v.isalpha():
+                        lo = (range(ord(start_v), ord(end_v) + 1, step)
+                              if ord(start_v) <= ord(end_v)
+                              else range(ord(start_v), ord(end_v) - 1,
+                                         -step))
+                        alts = [chr(c) for c in lo]
+                    else:
+                        a, b = int(start_v), int(end_v)
+                        width = 0
+                        if ((len(start_v.lstrip("-")) > 1
+                             and start_v.lstrip("-").startswith("0"))
+                                or (len(end_v.lstrip("-")) > 1
+                                    and end_v.lstrip("-").startswith("0"))):
+                            width = max(len(start_v.lstrip("-")),
+                                        len(end_v.lstrip("-")))
+                        rng = (range(a, b + 1, step) if a <= b
+                               else range(a, b - 1, -step))
+                        if width:
+                            alts = [("-" + str(abs(n)).zfill(width)
+                                     if n < 0 else str(n).zfill(width))
+                                    for n in rng]
+                        else:
+                            alts = [str(n) for n in rng]
+                if alts is None:
+                    expanded.append(s)
+                    continue
+                changed = True
+                for alt in alts:
+                    expanded.append(s[:start] + alt + s[end + 1:])
                 continue
             changed = True
             for alt in inner.split(","):
@@ -462,6 +574,13 @@ def _is_root_or_home(tok: str) -> bool:
       ``/home`` — all verified against ``_is_dangerous`` before this
       fix. See ``_glob_hits_guarded`` / ``_expand_braces`` for the
       precision rules (a glob under a named subdir stays allowed).
+    - Brace-sequence and ``${HOME}`` substring / suffix-removal
+      spellings of a guarded dir. ``/hom{e..f}`` brace-expands to
+      ``/home``, ``${HOME:0:5}`` / ``${HOME:0}`` substring-expand to
+      the home container / home itself, ``${HOME%/*}`` removes to
+      ``/home``, and ``${HOME: -11}`` (space form, one word in the
+      shell) substring-expands to home itself — all verified against
+      ``_is_dangerous`` before this fix.
     """
     t = tok.strip("\"'")
     if not t:
@@ -469,6 +588,11 @@ def _is_root_or_home(tok: str) -> bool:
     guarded = _guarded_dirs()
     for expansion in _expand_braces(t):
         spell = _normalize_path_spelling(expansion)
+        if not spell:
+            # An expansion to empty (e.g. ${HOME%%/*}) is no argument
+            # at all in the shell — not "/", which the rstrip fallback
+            # below would otherwise turn it into.
+            continue
         base = spell.rstrip("/") or "/"
         if base in guarded:
             return True
@@ -575,6 +699,29 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
         tokens = shlex.split(command, posix=True)
     except ValueError:
         return None  # unparseable; the shell will report the syntax error
+    # Spaces inside ${...} are part of the expansion, not word
+    # separators: the shell reads ${HOME: -11} as one word (the whole
+    # home dir), but shlex splits it into "${HOME:" and "-11}".
+    # Rejoin tokens while a ${...} group is still open so the
+    # normalizers above see the full expansion form.
+    merged: list[str] = []
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok.count("${") > tok.count("}") and i + 1 < len(tokens):
+            parts = [tok]
+            depth = tok.count("${") - tok.count("}")
+            j = i + 1
+            while j < len(tokens) and depth > 0:
+                parts.append(tokens[j])
+                depth += tokens[j].count("${") - tokens[j].count("}")
+                j += 1
+            merged.append(" ".join(parts))
+            i = j
+        else:
+            merged.append(tok)
+            i += 1
+    tokens = merged
     return (_rm_reason(tokens) or _find_reason(tokens)
             or _nested_reason(tokens, _depth))
 

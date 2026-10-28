@@ -3,6 +3,31 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.13] - 2026-10-28
+
+### Fixed
+- **Exec blocklist: brace-sequence, `${HOME}` substring, and
+  suffix-removal spellings can no longer wipe `/` or a home
+  directory.** The shell expands these before acting, so
+  `/hom{e..f}` is `/home`, `/home/hat{c..d}h` includes a home dir,
+  `${HOME:0:5}` is `/home` for a `/home/<user>` home,
+  `${HOME:0}` is home itself, `${HOME%/*}` removes to `/home`, and
+  the space form `${HOME: -11}` (one word in the shell, two tokens
+  under `shlex`) substring-expands to home itself — all of these
+  slipped past the old check, which only understood comma braces and
+  the `<op>word` parameter forms. `_expand_braces` now expands
+  `{a..z}` / `{1..10}` sequences (with optional `..step`, zero-step
+  meaning step 1, and the shell's zero-padding), `_normalize_path_spelling`
+  now expands `${HOME:offset[:length]}` substrings and `${HOME#/%pat}`
+  pattern removal, and `_is_dangerous` rejoins tokens while a
+  `${...}` group is still open so spaced expansions tokenize as the
+  shell sees them. Precision is preserved: `${HOME#*/}` /
+  `${HOME:1}` are relative paths, `${HOME%%/*}` expands to empty (no
+  argument at all, not `/`), `${HOME%/*}/shared` is a sibling of the
+  homes, and brace sequences over non-guarded dirs (`/tmp/{a..c}`)
+  stay allowed. New tests pin the blocked spellings and the allowed
+  ones.
+
 ## [0.6.12] - 2026-10-27
 
 ### Fixed
