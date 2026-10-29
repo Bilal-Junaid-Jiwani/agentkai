@@ -181,7 +181,7 @@ _SEPARATORS = {";", "&&", "||", "|", "&"}
 # one-liner. The shell name must be the piped command word, so a pipe into
 # e.g. sha256sum does not match.
 _PIPE_TO_SHELL = re.compile(
-    r"\b(?:curl|wget)\b[^|]*\|\s*(?:sudo\s+)?[\w./-]*"
+    r"\b(?:curl|wget)\b[^|]*\|\s*(?:sudo\s+)?['\"]?[\w./-]*"
     r"(?:sh|bash|zsh|dash|fish|ksh)\b")
 
 
@@ -581,6 +581,12 @@ def _is_root_or_home(tok: str) -> bool:
       ``/home``, and ``${HOME: -11}`` (space form, one word in the
       shell) substring-expands to home itself — all verified against
       ``_is_dangerous`` before this fix.
+    - ANSI-C-quoted spellings of a guarded dir. ``$'/home'``,
+      ``$'\\x2fhome'`` (hex escape), ``$'\\057home'`` (octal escape),
+      ``/$'home'`` and ``$'/'home`` all expand to a guarded dir, and
+      ``/home/$'..'`` expands to ``/`` — all verified against
+      ``_is_dangerous`` before this fix, which saw only shlex-mangled
+      tokens like ``$/home``. See ``_expand_ansi_c_quoting``.
     """
     t = tok.strip("\"'")
     if not t:
@@ -671,16 +677,188 @@ def _nested_reason(tokens: list[str], depth: int) -> str | None:
     return None
 
 
+# ANSI-C quoting: the shell decodes $'...' escapes before acting, but
+# shlex strips the quotes first and leaves "$/home" / "$\\x2fhome" — tokens
+# the path normalizers below never recognize. So $'...' / $"..." segments
+# are decoded on the raw command, before tokenizing (see
+# _expand_ansi_c_quoting). Unknown escapes keep their backslash, exactly
+# as the shell leaves them ($'\\q' is "\\q", not "q").
+_ANSI_C_SIMPLE = {
+    "a": "\a", "b": "\b", "e": "\x1b", "E": "\x1b",
+    "f": "\f", "n": "\n", "r": "\r", "t": "\t", "v": "\v",
+    "\\": "\\", "'": "'", '"': '"', "?": "?",
+}
+_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
+
+
+def _decode_ansi_c(body: str) -> str:
+    """Decode the inside of a ``$'...'`` segment the way the shell does."""
+    out: list[str] = []
+    i = 0
+    while i < len(body):
+        c = body[i]
+        if c != "\\" or i + 1 >= len(body):
+            out.append(c)
+            i += 1
+            continue
+        nxt = body[i + 1]
+        if nxt == "\n":  # line continuation: both characters vanish
+            i += 2
+            continue
+        if nxt in _ANSI_C_SIMPLE:
+            out.append(_ANSI_C_SIMPLE[nxt])
+            i += 2
+            continue
+        if nxt == "x":
+            j = i + 2
+            hexs = ""
+            while (j < len(body) and len(hexs) < 2
+                   and body[j] in _HEX_DIGITS):
+                hexs += body[j]
+                j += 1
+            if hexs:
+                out.append(chr(int(hexs, 16)))
+                i = j
+            else:
+                out.append("\\x")
+                i += 2
+            continue
+        if nxt in ("u", "U"):
+            width = 4 if nxt == "u" else 8
+            hexs = body[i + 2:i + 2 + width]
+            if (len(hexs) == width
+                    and all(ch in _HEX_DIGITS for ch in hexs)):
+                out.append(chr(int(hexs, 16)))
+                i += 2 + width
+            else:
+                out.append("\\" + nxt)
+                i += 2
+            continue
+        if nxt == "c" and i + 2 < len(body) and body[i + 2].isalpha():
+            out.append(chr(ord(body[i + 2].upper()) - 64))
+            i += 3
+            continue
+        if nxt in "01234567":
+            j = i + 1
+            octs = ""
+            while (j < len(body) and len(octs) < 3
+                   and body[j] in "01234567"):
+                octs += body[j]
+                j += 1
+            out.append(chr(int(octs, 8) & 0xFF))
+            i = j
+            continue
+        out.append("\\" + nxt)  # unknown escape: backslash kept, as in bash
+        i += 2
+    return "".join(out)
+
+
+def _expand_ansi_c_quoting(command: str) -> str:
+    """Replace unquoted ``$'...'`` / ``$"..."`` segments with their value.
+
+    ``rm -rf $'/home'`` / ``$'\\x2fhome'`` / ``/$'home'`` all delete a
+    guarded dir once the shell expands them, but the old scan saw only
+    the shlex-mangled ``$/home`` / ``$\\x2fhome`` / ``/$home`` and let
+    them through (verified against ``_is_dangerous`` before this fix).
+    Each decoded segment is re-wrapped in single quotes so it stays one
+    word for shlex, exactly as the shell keeps it one word; the normal
+    path checks then see the real path. Segments inside single or double
+    quotes are left alone: there the shell does not expand them either
+    (``'$'/home''``-style nesting still reaches the nested-shell rescan
+    as a proper ``$'...'`` payload, so it is caught on the second pass).
+    Decoded text flows through the same quote-insensitive normalizers
+    as the rest of the scan, matching the existing treatment of quoted
+    expansions such as ``'${HOME}'``.
+    """
+    out: list[str] = []
+    i = 0
+    n = len(command)
+    while i < n:
+        c = command[i]
+        if c == "\\" and i + 1 < n:
+            out.append(command[i:i + 2])
+            i += 2
+            continue
+        if c == "'":
+            j = command.find("'", i + 1)
+            if j == -1:
+                out.append(command[i:])
+                break
+            out.append(command[i:j + 1])
+            i = j + 1
+            continue
+        if c == '"':
+            # Inside double quotes the shell strips the backslash from
+            # \$ but shlex does not — so a nested payload written as
+            # bash -c "rm -rf \$'/home'" reaches the nested-shell rescan
+            # as rm -rf \$'/home', which shlex mangles to $/home and the
+            # ANSI-C decode above never sees. Translating \$' -> $'
+            # inside double quotes hands the rescan the payload the
+            # inner shell actually receives. Only \$' is translated:
+            # \$VAR forms already resolve through the rescan, and
+            # translating \$" would break shlex quote structure.
+            j = i + 1
+            seg: list[str] = []
+            while j < n:
+                if command[j] == "\\" and j + 1 < n:
+                    if (command[j + 1] == "$" and j + 2 < n
+                            and command[j + 2] == "'"):
+                        seg.append("$'")
+                        j += 3
+                        continue
+                    seg.append(command[j:j + 2])
+                    j += 2
+                    continue
+                if command[j] == '"':
+                    break
+                seg.append(command[j])
+                j += 1
+            out.append('"' + "".join(seg) + ('"' if j < n else ""))
+            i = j + 1 if j < n else n
+            continue
+        if c == "$" and i + 1 < n and command[i + 1] in "'\"":
+            quote = command[i + 1]
+            j = i + 2
+            body: list[str] = []
+            closed = False
+            while j < n:
+                if command[j] == "\\" and j + 1 < n:
+                    body.append(command[j:j + 2])
+                    j += 2
+                    continue
+                if command[j] == quote:
+                    closed = True
+                    break
+                body.append(command[j])
+                j += 1
+            if not closed:
+                out.append(command[i:])
+                break
+            raw = "".join(body)
+            if quote == "'":
+                decoded = _decode_ansi_c(raw)
+            else:  # $"...": locale string, content is literal
+                decoded = raw.replace('\\"', '"').replace("\\\\", "\\")
+            out.append("'" + decoded.replace("'", "'\\''") + "'")
+            i = j + 1
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     """Blocklist scan. Returns a reason string, or None if the command passes.
 
     This is a blocklist, not a sandbox: it stops the obvious footguns, not a
     determined adversary. The permission gate is the real protection, and
     real isolation belongs in a container layer. The scan is spelling-aware
-    (``/bin/rm`` counts as ``rm``), covers ``$HOME``/``~`` targets, recurses
-    into nested ``sh -c``/``eval`` payloads, and catches ``find / -delete``
-    and download-piped-to-shell one-liners.
+    (``/bin/rm`` counts as ``rm``), covers ``$HOME``/``~`` targets and
+    ``$'...'`` ANSI-C-quoted spellings of them, recurses into nested
+    ``sh -c``/``eval`` payloads, and catches ``find / -delete`` and
+    download-piped-to-shell one-liners.
     """
+    command = _expand_ansi_c_quoting(command)
     patterns = [
         (r":\(\)\s*\{", "fork bomb"),
         (r"\bmkfs(\.\w+)?\b", "filesystem format"),

@@ -3,6 +3,31 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.14] - 2026-10-29
+
+### Fixed
+- **Exec blocklist: ANSI-C-quoted spellings can no longer wipe `/`
+  or a home directory.** The shell decodes `$'...'` escapes before
+  acting, so `rm -rf $'/home'` is `rm -rf /home`, `$'\x2fhome'`
+  (hex escape) and `$'\057home'` (octal escape) spell the same path,
+  `/$'home'` and `$'/'home` build it across a quoted segment, and
+  `/home/$'..'` resolves to `/` — all of these slipped past the old
+  check, which saw only the shlex-mangled tokens (`$/home`,
+  `$\x2fhome`, `/$home`) that no normalizer recognizes. The scan now
+  decodes unquoted `$'...'` segments (and `$"..."` locale strings)
+  on the raw command before tokenizing, re-wrapping each decoded
+  segment in single quotes so it stays one word; nested payloads
+  written as `bash -c "rm -rf \$'/home'"` are caught too, since the
+  scan now accounts for the outer shell stripping `\$` inside double
+  quotes (which shlex does not). The download-piped-to-shell pattern
+  gets the same treatment: `curl ... | $'sh'` / `| 'sh'` are now
+  blocked. Precision is preserved: a quoted non-guarded path
+  (`$'/tmp/foo'`), a quoted subdir of a home dir, a quoted relative
+  path, a quoted non-shell piped command, and the single-quote
+  concatenation lookalike (`bash -c 'rm -rf $'/home''`, which the
+  shell reads as the literal word `$/home`) stay allowed. New tests
+  pin the blocked spellings and the allowed ones.
+
 ## [0.6.13] - 2026-10-28
 
 ### Fixed
