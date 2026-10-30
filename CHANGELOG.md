@@ -3,6 +3,25 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.15] - 2026-10-30
+
+### Fixed
+- **Exec blocklist: the `chmod 777 /` permission nuke slipped past
+  the scan in its most natural spelling.** The pattern required
+  trailing whitespace after `/`, so `chmod -R 777 /` at the end of a
+  command and `chmod -R 777 /; ...` before the next command were
+  allowed, as were `--recursive` and combined `-Rf` flag spellings.
+  The pattern now accepts any flag spellings before the mode and
+  matches `/` at end of command or before a shell separator too.
+  Precision is preserved: `777` on a non-root dir (`/tmp`, `/home`)
+  and non-`777` modes on `/` stay allowed. New tests pin the blocked
+  spellings and the allowed ones.
+- **Health-summary tests no longer age out of their own window.**
+  The fixtures used fixed September dates, which fell outside the
+  30-day summary window as the calendar moved, failing two tests for
+  no code reason. Fixture dates are now relative to today, with the
+  same expected aggregates.
+
 ## [0.6.14] - 2026-10-29
 
 ### Fixed

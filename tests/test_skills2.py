@@ -1,6 +1,7 @@
 """Tests for skills pack 2: places, image_search, shopping, travel, health,
 payments. No network anywhere — all HTTP goes through FakeTransport."""
 import json
+from datetime import date, timedelta
 
 import pytest
 
@@ -323,12 +324,20 @@ def test_travel_search_with_provider(home_env):
 
 # ---- health ------------------------------------------------------------------
 
-EXPORT_XML = """<?xml version="1.0" encoding="UTF-8"?>
+# Fixture dates are relative to today: health_summary only counts the
+# last N days, so fixed calendar dates age out of the window and the
+# tests start failing for no code reason (they did, once the September
+# dates fell more than 30 days behind). d1/d2/d3 play the roles of the
+# old fixed dates, with the same expected aggregates.
+def _health_xml():
+    d1 = (date.today() - timedelta(days=1)).isoformat()
+    d2 = (date.today() - timedelta(days=2)).isoformat()
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
 <HealthData>
- <Record type="HKQuantityTypeIdentifierStepCount" value="4000" startDate="2026-09-28 08:00:00 +0500" endDate="2026-09-28 08:00:00 +0500"/>
- <Record type="HKQuantityTypeIdentifierStepCount" value="6000" startDate="2026-09-29 08:00:00 +0500" endDate="2026-09-29 08:00:00 +0500"/>
- <Record type="HKCategoryTypeIdentifierSleepAnalysis" value="HKCategoryValueSleepAnalysisAsleepCore" startDate="2026-09-28 23:00:00 +0500" endDate="2026-09-29 06:30:00 +0500"/>
- <Workout workoutActivityType="HKWorkoutActivityTypeRunning" startDate="2026-09-29 07:00:00 +0500" endDate="2026-09-29 07:30:00 +0500" totalEnergyBurned="300"/>
+ <Record type="HKQuantityTypeIdentifierStepCount" value="4000" startDate="{d2} 08:00:00 +0500" endDate="{d2} 08:00:00 +0500"/>
+ <Record type="HKQuantityTypeIdentifierStepCount" value="6000" startDate="{d1} 08:00:00 +0500" endDate="{d1} 08:00:00 +0500"/>
+ <Record type="HKCategoryTypeIdentifierSleepAnalysis" value="HKCategoryValueSleepAnalysisAsleepCore" startDate="{d2} 23:00:00 +0500" endDate="{d1} 06:30:00 +0500"/>
+ <Workout workoutActivityType="HKWorkoutActivityTypeRunning" startDate="{d1} 07:00:00 +0500" endDate="{d1} 07:30:00 +0500" totalEnergyBurned="300"/>
 </HealthData>
 """
 
@@ -337,10 +346,11 @@ def _write_health(home, xml=True, steps_csv=False):
     hdir = home / "health"
     hdir.mkdir(parents=True, exist_ok=True)
     if xml:
-        (hdir / "export.xml").write_text(EXPORT_XML, encoding="utf-8")
+        (hdir / "export.xml").write_text(_health_xml(), encoding="utf-8")
     if steps_csv:
+        d3 = (date.today() - timedelta(days=3)).isoformat()
         (hdir / "steps.csv").write_text(
-            "date,steps\n2026-09-27,8000\n", encoding="utf-8")
+            f"date,steps\n{d3},8000\n", encoding="utf-8")
 
 
 def test_health_summary_xml(home_env):

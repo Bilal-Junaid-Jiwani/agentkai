@@ -866,7 +866,15 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
         (r">\s*/dev/(sd|hd|nvme|vd)[a-z0-9]*", "raw disk write"),
         (r"\b(sha256sum\s+)?>\s*/dev/(mem|kmem|port)\b", "raw device write"),
         (r"\b(shutdown|reboot|halt|poweroff)\b", "power control"),
-        (r"\bchmod\s+(-R\s+)?0?777\s+/\s", "permission nuke"),
+        # The permission-nuke pattern used to require trailing whitespace
+        # after "/": the plain "chmod -R 777 /" (end of command, or "/;"
+        # before the next command) slipped past it. The terminator is now
+        # whitespace, end of command, or a shell separator, and any flag
+        # spellings (-R, -Rf, --recursive) are accepted before the mode,
+        # so only the root dir itself is guarded — /tmp or /home stay
+        # allowed, as before.
+        (r"\bchmod\s+(?:-\S+\s+)*0?777\s+/+(?:\s|$|[;&|])",
+         "permission nuke"),
     ]
     for pattern, reason in patterns:
         if re.search(pattern, command):

@@ -133,6 +133,36 @@ def test_exec_blocklist(reg):
         assert result.startswith("ERROR:") and "blocked" in result, cmd
 
 
+def test_exec_blocklist_chmod_permission_nuke(reg):
+    """chmod 777 on / must be blocked however the command ends.
+
+    The old pattern required trailing whitespace after "/", so the
+    plain "chmod -R 777 /" (end of command) and "chmod -R 777 /; ..."
+    slipped past it, as did --recursive / combined -Rf flag spellings.
+    Precision is preserved: 777 on a non-root dir and non-777 modes
+    on / stay allowed.
+    """
+    for cmd in ("chmod -R 777 /",
+                "chmod -R 777 /; echo done",
+                "chmod -R 777 / && echo done",
+                "chmod 777 /",
+                "chmod --recursive 777 /",
+                "chmod -Rf 777 /",
+                "chmod -R 0777 /",
+                "chmod -R 777 //"):
+        result = reg.get("exec").run(command=cmd)
+        assert isinstance(result, str), cmd
+        assert result.startswith("ERROR:") and "blocked" in result, cmd
+    # Precision via the pure-function scan: running these through exec
+    # would actually chmod the target.
+    from agentkai.tools import _is_dangerous
+    for cmd in ("chmod -R 777 /tmp",
+                "chmod -R 777 /home",
+                "chmod -R 755 /",
+                "chmod -R 777 /home/shared"):
+        assert _is_dangerous(cmd) is None, cmd
+
+
 def test_exec_blocklist_bypasses(reg):
     """Spelling variants a reviewer used to slip past the old blocklist."""
     for cmd in ("/bin/rm -rf /",                    # rm by absolute path
