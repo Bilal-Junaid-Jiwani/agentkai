@@ -847,6 +847,106 @@ def _expand_ansi_c_quoting(command: str) -> str:
     return "".join(out)
 
 
+_SYMBOLIC_CLAUSE = re.compile(r"^([ugoa]*)([+-=])([rwxXstugo]*)$")
+
+
+def _chmod_symbolic_nukes_root(mode: str) -> bool:
+    """True if symbolic *mode* leaves ``/`` world-writable.
+
+    The numeric pattern above catches ``777`` in any octal spelling,
+    but the symbolic spellings of the same mode slipped past it:
+    ``chmod a+rwx /``, ``a=rwx /`` and ``u=rwx,g=rwx,o=rwx /`` all
+    make root world-writable, as do ``go+rwx /`` (root's owner already
+    has full access) and plain ``o+w /``. The rule is the end state,
+    not any single clause: clauses apply in order (``a+rwx,o-w /``
+    takes the write bit back off other, so it stays allowed), ``=``
+    replaces a class's bits, and ``-`` can only remove. Copy letters
+    (``o=u``) grant the source class's usual bits on ``/`` — owner
+    root has rwx, group root has r-x. An empty who (``+rwx``) is
+    umask-masked in the shell, so with the standard 022 umask other
+    gains r-x but not w, and it stays allowed, exactly like the
+    allowed ``755 /``. ``s``/``t`` grant no write and are ignored;
+    ``X`` on a directory behaves as ``x``. A non-symbolic mode
+    (``777``, ``--help``) returns False: the numeric pattern owns it.
+    """
+    perms: dict[str, set[str]] = {"u": set(), "g": set(), "o": set()}
+    for clause in mode.split(","):
+        m = _SYMBOLIC_CLAUSE.match(clause)
+        if not m:
+            return False
+        who, op, letters = m.groups()
+        if "a" in who:
+            classes = {"u", "g", "o"}
+        elif who:
+            classes = set(who)
+        else:
+            classes = {"u", "g", "o"}
+        masked = not who  # empty who: umask 022 strips w from g/o
+        granted: set[str] = set()
+        for ch in letters:
+            if ch in "rwx":
+                granted.add(ch)
+            elif ch == "X":
+                granted.add("x")  # target is a dir, so X behaves as x
+            elif ch == "u":
+                granted.update("rwx")
+            elif ch in "go":
+                granted.update("rx")
+            # "s"/"t": setuid/setgid/sticky — no write grant, ignored
+        for c in classes:
+            grant = set(granted)
+            if masked and c in "go":
+                grant.discard("w")
+            if op == "=":
+                perms[c] = grant
+            elif op == "+":
+                perms[c] |= grant
+            else:  # "-": removal can only take write away
+                perms[c] -= grant
+    return "w" in perms["o"]
+
+
+def _chmod_reason(tokens: list[str]) -> str | None:
+    """Symbolic chmod that leaves ``/`` world-writable (see above).
+
+    Scoped exactly like the numeric pattern: only the root dir itself
+    is guarded, so ``a+rwx /tmp`` and ``a+rwx /home`` stay allowed.
+    ``chmod`` is matched by basename (``/bin/chmod``, ``sudo chmod``)
+    like ``_rm_reason``; ``--reference <file>`` is skipped as a
+    flag-with-argument, and ``--`` ends flag parsing. A target token
+    with an attached separator (``/;`` from shlex, which does not split
+    ``;``) still counts as root.
+    """
+    for i, tok in enumerate(tokens):
+        if _basename(tok) != "chmod":
+            continue
+        args = _args_until_separator(tokens, i + 1)
+        j = 0
+        while j < len(args):
+            arg = args[j]
+            if arg == "--":
+                j += 1
+                break
+            if not arg.startswith("-"):
+                break
+            if arg == "--reference":
+                j += 2
+                continue
+            j += 1
+        if j >= len(args):
+            continue
+        mode = args[j]
+        if not _chmod_symbolic_nukes_root(mode):
+            continue
+        for target in args[j + 1:]:
+            if target.startswith("-"):
+                continue
+            root = target.strip("\"'").rstrip(";&|").rstrip("/")
+            if target and root == "":
+                return "permission nuke"
+    return None
+
+
 def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     """Blocklist scan. Returns a reason string, or None if the command passes.
 
@@ -872,8 +972,13 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
         # whitespace, end of command, or a shell separator, and any flag
         # spellings (-R, -Rf, --recursive) are accepted before the mode,
         # so only the root dir itself is guarded — /tmp or /home stay
-        # allowed, as before.
-        (r"\bchmod\s+(?:-\S+\s+)*0?777\s+/+(?:\s|$|[;&|])",
+        # allowed, as before. The numeric mode is any octal run ending
+        # in 777, not just 777/0777: leading zeros (00777) and the
+        # special-bit digit (4777, 7777, 1777, 07777) spell the same
+        # mode and used to slip past the single-optional-zero pattern.
+        # Symbolic modes that leave / world-writable are caught by
+        # _chmod_reason below, on the tokenized command.
+        (r"\bchmod\s+(?:-\S+\s+)*[0-7]*777\s+/+(?:\s|$|[;&|])",
          "permission nuke"),
     ]
     for pattern, reason in patterns:
@@ -909,6 +1014,7 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
             i += 1
     tokens = merged
     return (_rm_reason(tokens) or _find_reason(tokens)
+            or _chmod_reason(tokens)
             or _nested_reason(tokens, _depth))
 
 

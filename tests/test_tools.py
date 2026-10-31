@@ -163,6 +163,51 @@ def test_exec_blocklist_chmod_permission_nuke(reg):
         assert _is_dangerous(cmd) is None, cmd
 
 
+def test_exec_blocklist_chmod_equivalent_mode_spellings():
+    """chmod permission nukes in spellings the 0.6.15 pattern missed.
+
+    Numeric: leading zeros (00777) and the special-bit digit (4777,
+    7777, 1777, 07777) spell the same 777 mode the old pattern only
+    matched as 777/0777. Symbolic: a+rwx, a=rwx, u=rwx,g=rwx,o=rwx,
+    go+rwx, o+rwx and plain o+w all leave / world-writable.
+    Precision is preserved: non-777 modes on /, 777-class modes on
+    non-root dirs, owner/group-only grants, read-only grants to other,
+    the umask-masked bare +rwx (other gains r-x, not w, like the
+    allowed 755 /), and clauses that take other's write back off
+    (a+rwx,o-w) stay allowed. All cases via the pure-function scan:
+    running the blocked ones through exec would be safe, but the
+    allowed ones would actually chmod the target.
+    """
+    from agentkai.tools import _is_dangerous
+    for cmd in ("chmod 00777 /",
+                "chmod 4777 /",
+                "chmod 7777 /",
+                "chmod 1777 /",
+                "chmod 07777 /",
+                "chmod -R a+rwx /",
+                "chmod -R a+rwx /; echo done",
+                "chmod a=rwx /",
+                "chmod u=rwx,g=rwx,o=rwx /",
+                "chmod go+rwx /",
+                "chmod o+rwx /",
+                "chmod o+w /",
+                "chmod o=u /",
+                "/bin/chmod a+rwx /"):
+        assert _is_dangerous(cmd) is not None, cmd
+    for cmd in ("chmod 0775 /",
+                "chmod 0755 /",
+                "chmod 777 /tmp",
+                "chmod a+rwx /tmp",
+                "chmod a+rwx /home",
+                "chmod u+rwx /",
+                "chmod g+rwx /",
+                "chmod o+r /",
+                "chmod +rwx /",
+                "chmod a+rwx,o-w /",
+                "chmod o+w,o-w /"):
+        assert _is_dangerous(cmd) is None, cmd
+
+
 def test_exec_blocklist_bypasses(reg):
     """Spelling variants a reviewer used to slip past the old blocklist."""
     for cmd in ("/bin/rm -rf /",                    # rm by absolute path

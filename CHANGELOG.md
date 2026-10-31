@@ -3,6 +3,27 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.16] - 2026-10-31
+
+### Fixed
+- **Exec blocklist: permission-nuke spellings of `chmod 777 /`
+  slipped past the 0.6.15 pattern.** Numeric modes are any octal run
+  ending in 777, but the pattern only matched `777`/`0777`, so
+  `chmod 00777 /` (leading zeros) and `chmod 4777 /`, `7777 /`,
+  `1777 /`, `07777 /` (setuid/setgid/sticky bit) were allowed — and
+  every symbolic spelling of the same mode was allowed too:
+  `chmod a+rwx /`, `a=rwx /`, `u=rwx,g=rwx,o=rwx /`, `go+rwx /`,
+  `o+rwx /`, and plain `o+w /` all leave `/` world-writable. The
+  numeric pattern now matches any octal run ending in 777, and a new
+  token-level check blocks symbolic modes whose end state leaves `/`
+  world-writable (clauses apply in order, so `a+rwx,o-w /` takes the
+  write bit back off and stays allowed). Scope is unchanged: only
+  `/` itself is guarded, and `777`-class modes on `/tmp`/`/home`,
+  non-777 modes on `/`, owner/group-only grants, other-read-only
+  grants, and the umask-masked bare `+rwx /` (other gains r-x, not
+  w, like the allowed `755 /`) stay allowed. New tests pin the
+  blocked spellings and the allowed ones.
+
 ## [0.6.15] - 2026-10-30
 
 ### Fixed
