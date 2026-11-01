@@ -666,7 +666,12 @@ def _nested_reason(tokens: list[str], depth: int) -> str | None:
     for i, tok in enumerate(tokens):
         if _basename(tok) in _SHELLS and i + 2 < len(tokens) \
                 and tokens[i + 1] == "-c":
-            reason = _is_dangerous(tokens[i + 2], depth + 1)
+            # The payload is one shell word, but operator splitting
+            # (see _split_shell_operators) may have broken a grouped
+            # payload such as '(rm -rf /)' into several tokens, so
+            # rejoin up to the next top-level separator.
+            payload = " ".join(_args_until_separator(tokens, i + 2))
+            reason = _is_dangerous(payload, depth + 1)
             if reason:
                 return reason
         if tok == "eval" and i + 1 < len(tokens):
@@ -947,6 +952,34 @@ def _chmod_reason(tokens: list[str]) -> str | None:
     return None
 
 
+# Shell operators shlex never splits on (see _split_shell_operators).
+_SHELL_OPERATORS = re.compile(r"([;&|()]+)")
+
+
+def _split_shell_operators(tokens: list[str]) -> list[str]:
+    """Split shell operators glued to neighbouring words.
+
+    ``shlex`` splits on whitespace only, so it never separates the
+    shell's own operators: ``rm -rf /; echo`` tokenizes with ``/;``
+    as one word, ``(rm -rf /)`` with ``(rm`` and ``/)``, and
+    ``echo hi;rm -rf /`` with ``hi;rm`` — none of which the command
+    or path checks recognize, so all three slipped past the scan
+    (verified against ``_is_dangerous`` before this fix). The shell
+    itself splits on these operators whether or not whitespace
+    surrounds them, so the scan splits each token on runs of
+    ``; & | ( )`` and keeps the operators as their own tokens, which
+    ``_args_until_separator`` already treats as command boundaries.
+    Quoted operators lose their quoting here (shlex already dropped
+    it), so a literal ``;`` inside a quoted guarded path is an
+    accepted imprecision — the same quote-blindness the path checks
+    already have.
+    """
+    out: list[str] = []
+    for tok in tokens:
+        out.extend(part for part in _SHELL_OPERATORS.split(tok) if part)
+    return out
+
+
 def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     """Blocklist scan. Returns a reason string, or None if the command passes.
 
@@ -954,9 +987,10 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     determined adversary. The permission gate is the real protection, and
     real isolation belongs in a container layer. The scan is spelling-aware
     (``/bin/rm`` counts as ``rm``), covers ``$HOME``/``~`` targets and
-    ``$'...'`` ANSI-C-quoted spellings of them, recurses into nested
-    ``sh -c``/``eval`` payloads, and catches ``find / -delete`` and
-    download-piped-to-shell one-liners.
+    ``$'...'`` ANSI-C-quoted spellings of them, splits shell operators
+    glued to neighbouring words (``/;``, ``(rm``, ``hi;rm``), recurses
+    into nested ``sh -c``/``eval`` payloads, and catches
+    ``find / -delete`` and download-piped-to-shell one-liners.
     """
     command = _expand_ansi_c_quoting(command)
     patterns = [
@@ -990,6 +1024,7 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
         tokens = shlex.split(command, posix=True)
     except ValueError:
         return None  # unparseable; the shell will report the syntax error
+    tokens = _split_shell_operators(tokens)
     # Spaces inside ${...} are part of the expansion, not word
     # separators: the shell reads ${HOME: -11} as one word (the whole
     # home dir), but shlex splits it into "${HOME:" and "-11}".

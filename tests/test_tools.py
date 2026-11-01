@@ -208,6 +208,56 @@ def test_exec_blocklist_chmod_equivalent_mode_spellings():
         assert _is_dangerous(cmd) is None, cmd
 
 
+def test_exec_blocklist_glued_operator_spellings(reg):
+    """Operators glued to a command or path, which shlex never splits.
+
+    The shell splits on ``; & | ( )`` whether or not whitespace
+    surrounds them, but ``shlex`` splits on whitespace only — so
+    ``rm -rf /; echo`` tokenized with ``/;`` as one word, ``(rm -rf
+    /)`` with ``(rm`` and ``/)``, and ``echo hi;rm -rf /`` with
+    ``hi;rm``, and none of them matched the command or path checks
+    (verified against ``_is_dangerous`` before the fix). The scan now
+    splits glued operators into their own tokens, and rejoins grouped
+    nested-shell payloads such as ``bash -c '(rm -rf /)'``. Blocked
+    cases go through exec (safe: exec blocks them); allowed cases use
+    the pure-function scan, since running them would delete the target.
+    """
+    for cmd in ("rm -rf /; echo done",
+                "rm -rf /|cat",
+                "rm -rf /& echo done",
+                "rm -rf /&&echo done",
+                "rm -rf /||echo done",
+                "rm -rf /home; echo done",
+                "rm -rf $HOME; echo done",
+                "rm -rf ~; echo done",
+                "rm -rf /*; echo done",
+                "rm -rf /home/hatch; echo done",
+                "(rm -rf /)",
+                "{ rm -rf /; }",
+                "echo hi;rm -rf /",
+                "true&&rm -rf /",
+                "find / -delete; echo done",
+                "bash -c '(rm -rf /)'",
+                "bash -c '(rm -rf /); echo done'",
+                "eval 'rm -rf /; echo done'"):
+        result = reg.get("exec").run(command=cmd)
+        assert isinstance(result, str), cmd
+        assert result.startswith("ERROR:") and "blocked" in result, cmd
+    from agentkai.tools import _is_dangerous
+    for cmd in ("rm -rf /tmp; echo done",
+                "rm -rf /tmp/*; echo done",
+                "rm -rf /home/shared; echo done",
+                "rm -rf ./build; echo done",
+                "cp -r /tmp/x /tmp/y; echo done",
+                "echo a;b",
+                "echo foo(bar)",
+                "find /tmp -delete",
+                # "; -delete" is a separate command, not a find flag:
+                # "find /" on its own only lists.
+                "find /; -delete"):
+        assert _is_dangerous(cmd) is None, cmd
+
+
 def test_exec_blocklist_bypasses(reg):
     """Spelling variants a reviewer used to slip past the old blocklist."""
     for cmd in ("/bin/rm -rf /",                    # rm by absolute path

@@ -34,9 +34,11 @@ tricks are rejected. `exec` additionally refuses obviously destructive
 commands (`rm -rf /`, disk wipes, fork bombs) — including spelling
 variants such as `/bin/rm -rf $HOME`, glob and brace spellings of
 guarded paths (`/hom?`, `/{,}`), payloads nested in `sh -c '...'`,
-`find / -delete`, downloads piped into a shell (`curl ... | sh`), and
+`find / -delete`, downloads piped into a shell (`curl ... | sh`),
 `chmod` permission nukes on `/` in numeric (`00777`, `4777`) or
-symbolic (`a+rwx`) mode spellings. This
+symbolic (`a+rwx`) mode spellings, and shell operators glued to a
+command or path (`rm -rf /; ...`, `(rm -rf /)`, `echo hi;rm -rf /`).
+This
 is a blocklist, not a sandbox: it stops accidents and casual abuse, not a
 determined attacker. The command runs with your shell's full permissions
 (only its working directory is confined), so the **permission gate** —

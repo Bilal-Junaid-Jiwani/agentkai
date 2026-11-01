@@ -3,6 +3,25 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.17] - 2026-11-01
+
+### Fixed
+- **Exec blocklist: shell operators glued to a command or path slipped
+  past the scan.** The shell splits on `;`, `&`, `|`, `(` and `)` whether
+  or not whitespace surrounds them, but `shlex` splits on whitespace
+  only — so `rm -rf /; echo done` tokenized with `/;` as one word,
+  `(rm -rf /)` with `(rm` and `/)`, and `echo hi;rm -rf /` with `hi;rm`,
+  and none of them matched the command or path checks; `find /
+  -delete; echo done` slipped too, since `-delete;` is not `-delete`.
+  The scan now splits glued operators into their own tokens (which the
+  existing separator handling already treats as command boundaries),
+  and nested-shell payload extraction rejoins grouped payloads such as
+  `bash -c '(rm -rf /)'`. Precision is preserved: `rm -rf /tmp; ...`,
+  `/tmp/*`, `/home/shared`, `./build`, plain `echo a;b`, and `find /
+  ; -delete` (where `;` makes `-delete` a separate command, not a find
+  flag) stay allowed. New tests pin the blocked spellings and the
+  allowed ones.
+
 ## [0.6.16] - 2026-10-31
 
 ### Fixed
