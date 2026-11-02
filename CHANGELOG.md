@@ -3,6 +3,33 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.18] - 2026-11-02
+
+### Fixed
+- **Exec blocklist: nested-shell payloads spelled without a standalone
+  `-c` word, and backtick command substitution, slipped past the
+  scan.** The nested-shell check only recognized a standalone `-c`
+  token immediately after the shell word, but the shell's option
+  parser also runs an attached argument (`sh -c'rm -rf /'` — shlex
+  merges it into the single token `-crm -rf /`), options before `-c`
+  (`bash --norc -c '...'`, `bash -o posix -c '...'`,
+  `bash --rcfile foo -c '...'`), and short-option clusters
+  (`sh -ec '...'`, `sh -xc'...'`) — and backtick substitution
+  (`echo \`rm -rf /\``) tokenizes with `` `rm `` and `` /` `` as
+  words, which neither the command nor the path checks recognized.
+  The scan now walks shell options the way getopt does (long options,
+  value-taking options, clusters where `-o` consumes its argument and
+  `-c` takes the rest of the cluster or the following words), and
+  splits backticks into their own tokens, with the backtick as a
+  separator so a following word is not mistaken for the substituted
+  command's argument. Precision is preserved: `sh -c'echo hi'`,
+  option-preceded benign payloads, `bash script.sh -c '...'` (where
+  `-c` is the script's argument, not the shell's), `sh -- -c '...'`
+  (option parsing ended), `echo \`date\``, and
+  `echo \`rm -rf /tmp\` /` (the trailing `/` belongs to echo, not
+  to rm) stay allowed. New tests pin the blocked spellings and the
+  allowed ones.
+
 ## [0.6.17] - 2026-11-01
 
 ### Fixed

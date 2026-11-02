@@ -176,7 +176,7 @@ def _resolve_in_roots(path: str, roots: list[Path]) -> Path:
 
 
 _SHELLS = {"sh", "bash", "zsh", "dash", "fish", "ksh", "ash"}
-_SEPARATORS = {";", "&&", "||", "|", "&"}
+_SEPARATORS = {";", "&&", "||", "|", "&", "`"}
 # curl/wget output piped straight into a shell: the classic remote-code
 # one-liner. The shell name must be the piped command word, so a pipe into
 # e.g. sha256sum does not match.
@@ -659,21 +659,96 @@ def _find_reason(tokens: list[str]) -> str | None:
     return None
 
 
+# Long options that take a separate value word (see _shell_c_payload).
+_VALUE_OPTIONS = {"--init-file", "--rcfile"}
+
+
+def _shell_c_payload(tokens: list[str], start: int) -> str | None:
+    """The ``-c`` command string of a shell invocation, or None.
+
+    ``start`` points just past the shell word. The old scan only
+    recognized a standalone ``-c`` word immediately after the shell,
+    but the shell's option parser is far more forgiving, and every
+    one of these runs the payload (verified against ``_is_dangerous``
+    before this fix):
+
+    - an attached argument: ``sh -c'rm -rf /'`` — shlex merges it
+      into the single token ``-crm -rf /``;
+    - options before ``-c``: ``bash --norc -c '...'``,
+      ``bash -o posix -c '...'``, ``bash --rcfile foo -c '...'``;
+    - short-option clusters: ``sh -ec '...'`` (``-e`` then ``-c``),
+      ``sh -xc'...'`` (``-x`` then ``-c`` with an attached argument).
+
+    The walk mirrors getopt: long options (``--opt=val`` as one word,
+    known value-taking options consuming the next word), short-option
+    clusters scanned left to right (``-o`` consumes the rest of its
+    cluster, or the next word, as its value; ``-c`` takes the rest of
+    its cluster, or the following words, as the command). ``--`` ends
+    option parsing and a first non-option word is a script file, not
+    a payload, so ``bash script.sh -c '...'`` and ``sh -- -c '...'``
+    stay untouched.
+    """
+    j = start
+    while j < len(tokens):
+        tok = tokens[j]
+        if tok == "--":
+            return None
+        if tok.startswith("--"):
+            if "=" in tok:
+                j += 1
+            elif tok in _VALUE_OPTIONS:
+                j += 2
+            else:
+                j += 1
+            continue
+        if tok.startswith("+") and len(tok) > 1:
+            j += 1
+            continue
+        if tok.startswith("-") and len(tok) > 1:
+            k = 1
+            consumed_value = False
+            while k < len(tok):
+                ch = tok[k]
+                if ch == "c":
+                    rest = tok[k + 1:]
+                    if rest:
+                        return " ".join(
+                            [rest] + _args_until_separator(tokens, j + 1))
+                    if j + 1 < len(tokens):
+                        return " ".join(
+                            _args_until_separator(tokens, j + 1))
+                    return None
+                if ch == "o":
+                    # -o's argument is the rest of the cluster, if any,
+                    # else the next word.
+                    consumed_value = k + 1 >= len(tok)
+                    break
+                k += 1
+            j += 2 if consumed_value else 1
+            continue
+        return None
+    return None
+
+
 def _nested_reason(tokens: list[str], depth: int) -> str | None:
-    """Rescan payloads handed to a nested shell (``bash -c '...'``, eval)."""
+    """Rescan payloads handed to a nested shell (``bash -c '...'``, eval).
+
+    The ``-c`` payload is found by ``_shell_c_payload``, which
+    understands attached arguments, clusters and preceding options —
+    not just a standalone ``-c`` word. The payload is rejoined up to
+    the next top-level separator, since operator splitting (see
+    ``_split_shell_operators``) may have broken a grouped payload such
+    as ``'(rm -rf /)'`` into several tokens.
+    """
     if depth >= 3:
         return None
     for i, tok in enumerate(tokens):
-        if _basename(tok) in _SHELLS and i + 2 < len(tokens) \
-                and tokens[i + 1] == "-c":
-            # The payload is one shell word, but operator splitting
-            # (see _split_shell_operators) may have broken a grouped
-            # payload such as '(rm -rf /)' into several tokens, so
-            # rejoin up to the next top-level separator.
-            payload = " ".join(_args_until_separator(tokens, i + 2))
-            reason = _is_dangerous(payload, depth + 1)
-            if reason:
-                return reason
+        if _basename(tok) in _SHELLS:
+            payload = _shell_c_payload(tokens, i + 1)
+            if payload:
+                reason = _is_dangerous(payload, depth + 1)
+                if reason:
+                    return reason
         if tok == "eval" and i + 1 < len(tokens):
             payload = " ".join(_args_until_separator(tokens, i + 1))
             reason = _is_dangerous(payload, depth + 1)
@@ -953,7 +1028,14 @@ def _chmod_reason(tokens: list[str]) -> str | None:
 
 
 # Shell operators shlex never splits on (see _split_shell_operators).
-_SHELL_OPERATORS = re.compile(r"([;&|()]+)")
+# Backtick is included: `` `rm -rf /` `` tokenizes with `` `rm`` and
+# ``/` `` as words, which neither the command nor the path checks
+# recognize, so backtick command substitution slipped past the scan
+# (verified against ``_is_dangerous`` before this fix). Splitting it
+# makes the substituted command an ordinary token sequence, and the
+# backtick is a separator too, so a following word is not mistaken
+# for the substituted command's argument.
+_SHELL_OPERATORS = re.compile(r"([;&|()`]+)")
 
 
 def _split_shell_operators(tokens: list[str]) -> list[str]:
@@ -967,7 +1049,7 @@ def _split_shell_operators(tokens: list[str]) -> list[str]:
     (verified against ``_is_dangerous`` before this fix). The shell
     itself splits on these operators whether or not whitespace
     surrounds them, so the scan splits each token on runs of
-    ``; & | ( )`` and keeps the operators as their own tokens, which
+    ``; & | ( ) ` `` and keeps the operators as their own tokens, which
     ``_args_until_separator`` already treats as command boundaries.
     Quoted operators lose their quoting here (shlex already dropped
     it), so a literal ``;`` inside a quoted guarded path is an
@@ -988,9 +1070,11 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     real isolation belongs in a container layer. The scan is spelling-aware
     (``/bin/rm`` counts as ``rm``), covers ``$HOME``/``~`` targets and
     ``$'...'`` ANSI-C-quoted spellings of them, splits shell operators
-    glued to neighbouring words (``/;``, ``(rm``, ``hi;rm``), recurses
-    into nested ``sh -c``/``eval`` payloads, and catches
-    ``find / -delete`` and download-piped-to-shell one-liners.
+    glued to neighbouring words (``/;``, ``(rm``, ``hi;rm``, backtick
+    substitution), recurses into nested ``sh -c``/``eval`` payloads —
+    including attached (``sh -c'...'``), clustered (``sh -ec '...'``)
+    and option-preceded (``bash --norc -c '...'``) ``-c`` spellings —
+    and catches ``find / -delete`` and download-piped-to-shell one-liners.
     """
     command = _expand_ansi_c_quoting(command)
     patterns = [

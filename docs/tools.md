@@ -36,8 +36,11 @@ variants such as `/bin/rm -rf $HOME`, glob and brace spellings of
 guarded paths (`/hom?`, `/{,}`), payloads nested in `sh -c '...'`,
 `find / -delete`, downloads piped into a shell (`curl ... | sh`),
 `chmod` permission nukes on `/` in numeric (`00777`, `4777`) or
-symbolic (`a+rwx`) mode spellings, and shell operators glued to a
-command or path (`rm -rf /; ...`, `(rm -rf /)`, `echo hi;rm -rf /`).
+symbolic (`a+rwx`) mode spellings, shell operators glued to a
+command or path (`rm -rf /; ...`, `(rm -rf /)`, `echo hi;rm -rf /`),
+nested-shell payloads spelled without a standalone `-c` word
+(`sh -c'...'`, `sh -ec '...'`, `bash --norc -c '...'`), and backtick
+command substitution (`` `rm -rf /` ``).
 This
 is a blocklist, not a sandbox: it stops accidents and casual abuse, not a
 determined attacker. The command runs with your shell's full permissions

@@ -258,6 +258,58 @@ def test_exec_blocklist_glued_operator_spellings(reg):
         assert _is_dangerous(cmd) is None, cmd
 
 
+def test_exec_blocklist_nested_shell_and_backtick_spellings(reg):
+    """Nested-shell payloads without a standalone ``-c`` word, and
+    backtick command substitution — both of which shlex never splits
+    into a recognizable command.
+
+    The old nested-shell scan only recognized a standalone ``-c``
+    token immediately after the shell word, so ``sh -c'rm -rf /'``
+    (shlex merges it into the single token ``-crm -rf /``),
+    ``bash --norc -c '...'`` / ``bash -o posix -c '...'`` /
+    ``bash --rcfile foo -c '...'`` (options before ``-c``), and
+    ``sh -ec '...'`` / ``sh -xc'...'`` (short-option clusters) all
+    slipped past it — yet the shell runs every one of them as a
+    ``-c`` payload (verified against ``_is_dangerous`` before the
+    fix). Backtick substitution slipped for the same tokenization
+    reason: ```echo `rm -rf /` ``` tokenizes with ``` `rm ``` and
+    ``` /` ``` as words. Blocked cases go through exec (safe: exec
+    blocks them); allowed cases use the pure-function scan.
+    """
+    for cmd in ("sh -c'rm -rf /'",
+                'bash -c"rm -rf /"',
+                "bash --norc -c 'rm -rf /'",
+                "bash -o posix -c 'rm -rf /'",
+                "bash --rcfile foo -c 'rm -rf /'",
+                "bash --init-file=foo -c 'rm -rf /'",
+                "sh -ec 'rm -rf /'",
+                "sh -xc'rm -rf /'",
+                "sudo sh -c'rm -rf /'",
+                "bash -c 'rm -rf $HOME' name0",
+                "echo `rm -rf /`",
+                "echo `rm -rf $HOME`",
+                "echo `rm -rf /; echo done`"):
+        result = reg.get("exec").run(command=cmd)
+        assert isinstance(result, str), cmd
+        assert result.startswith("ERROR:") and "blocked" in result, cmd
+    from agentkai.tools import _is_dangerous
+    for cmd in ("sh -c'echo hi'",
+                "bash --norc -c 'echo hi'",
+                "sh -ec 'echo hi'",
+                "sh -o posix -c 'echo hi'",
+                # "-c" after a script file is the script's argument,
+                # not the shell's option:
+                "bash script.sh -c 'rm -rf /'",
+                # "--" ends option parsing, so "-c" is positional:
+                "sh -- -c 'rm -rf /'",
+                "echo `date`",
+                "echo `rm -rf /tmp`",
+                # The backtick bounds the substituted command: the
+                # trailing "/" belongs to echo, not to rm:
+                "echo `rm -rf /tmp` /"):
+        assert _is_dangerous(cmd) is None, cmd
+
+
 def test_exec_blocklist_bypasses(reg):
     """Spelling variants a reviewer used to slip past the old blocklist."""
     for cmd in ("/bin/rm -rf /",                    # rm by absolute path
