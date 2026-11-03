@@ -3,6 +3,29 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.19] - 2026-11-03
+
+### Fixed
+- **Exec blocklist: writing to a raw disk or memory device spelled as
+  an ordinary file copy slipped past the scan.** The scan blocked the
+  same write spelled as `dd if=/dev/zero of=/dev/sda` or as a
+  redirect (`cat /dev/zero > /dev/sda`), but `cp /dev/zero /dev/sda`,
+  `mv x /dev/sda`, and `tee /dev/sda` matched no pattern or token
+  check — and neither did the same writes inside `bash -c '...'` /
+  `eval '...'` payloads, which the nested-shell rescan only catches
+  if the inner scan does. A new token-level check now blocks
+  `cp`/`mv`/`tee` whose write destination is a raw device
+  (`/dev/sd*`, `/dev/hd*`, `/dev/vd*`, `/dev/nvme*n*p*`,
+  `/dev/mmcblk*`, `/dev/mem`, `/dev/kmem`, `/dev/port`), with
+  `cp`/`mv` destination rules matching the shell (`--` ends flags,
+  `-t`/`--target-directory` names the destination, including
+  attached and clustered spellings; `tee` writes to every operand).
+  Precision is preserved: only the destination counts, so copying a
+  device *to* a safe path (`cp /dev/sda /tmp/backup`), a safe
+  `-t` target (`cp -t /tmp /dev/sda`), and harmless devices
+  (`/dev/null`, `/dev/zero`, `/dev/full`) stay allowed. New tests
+  pin the blocked spellings and the allowed ones.
+
 ## [0.6.18] - 2026-11-02
 
 ### Fixed

@@ -1062,6 +1062,79 @@ def _split_shell_operators(tokens: list[str]) -> list[str]:
     return out
 
 
+# A raw disk / memory device as a write destination: the same write
+# the ``dd of=`` and ``>`` redirect patterns above already block, spelled
+# as an ordinary file copy. ``cp /dev/zero /dev/sda`` overwrites the disk
+# exactly like ``dd if=/dev/zero of=/dev/sda``, and ``tee /dev/sda``
+# writes its stdin there — but neither matched any pattern or token
+# check, since the scan only knew ``dd``/redirect spellings of a raw
+# device write (verified against ``_is_dangerous`` before this fix).
+# Only the destination counts: reading a device (``cp /dev/sda
+# /tmp/backup``) or writing to a harmless device (``/dev/null``,
+# ``/dev/zero``, ``/dev/full``) stays allowed, and a bare ``/dev``
+# directory is not a device file. ``cp``/``mv`` take their last operand
+# as the destination unless ``-t``/``--target-directory`` names it
+# (attached ``-tDIR`` and clustered ``-rt DIR`` spellings included);
+# ``tee`` writes to every operand.
+_RAW_DEVICE = re.compile(
+    r"^/dev/(?:(?:sd|hd|vd)[a-z]+[0-9]*"
+    r"|nvme[0-9]+n[0-9]+(?:p[0-9]+)?"
+    r"|mmcblk[0-9]+(?:p[0-9]+)?"
+    r"|mem|kmem|port)$")
+
+
+def _raw_device_reason(tokens: list[str]) -> str | None:
+    """``cp``/``mv``/``tee`` writing to a raw disk or memory device."""
+    for i, tok in enumerate(tokens):
+        name = _basename(tok)
+        if name not in ("cp", "mv", "tee"):
+            continue
+        args = _args_until_separator(tokens, i + 1)
+        operands: list[str] = []
+        target_dir: str | None = None
+        j = 0
+        while j < len(args):
+            arg = args[j]
+            if arg == "--":
+                operands.extend(args[j + 1:])
+                break
+            if arg in ("-t", "--target-directory"):
+                if j + 1 < len(args):
+                    target_dir = args[j + 1]
+                j += 2
+                continue
+            if arg.startswith("--target-directory="):
+                target_dir = arg.split("=", 1)[1]
+                j += 1
+                continue
+            if arg.startswith("-") and not arg.startswith("--") and arg != "-":
+                # Short-option cluster: a "t" takes its value from the
+                # rest of the cluster, if any, else the next word.
+                k = arg.find("t", 1)
+                if k != -1:
+                    if k + 1 < len(arg):
+                        target_dir = arg[k + 1:]
+                    elif j + 1 < len(args):
+                        target_dir = args[j + 1]
+                        j += 1
+                j += 1
+                continue
+            operands.append(arg)
+            j += 1
+        if name == "tee":
+            candidates = operands
+        elif target_dir is not None:
+            candidates = [target_dir]
+        elif operands:
+            candidates = [operands[-1]]
+        else:
+            candidates = []
+        for dest in candidates:
+            if dest and _RAW_DEVICE.match(dest.strip("\"'").rstrip("/")):
+                return "raw disk write"
+    return None
+
+
 def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     """Blocklist scan. Returns a reason string, or None if the command passes.
 
@@ -1074,7 +1147,8 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     substitution), recurses into nested ``sh -c``/``eval`` payloads —
     including attached (``sh -c'...'``), clustered (``sh -ec '...'``)
     and option-preceded (``bash --norc -c '...'``) ``-c`` spellings —
-    and catches ``find / -delete`` and download-piped-to-shell one-liners.
+    and catches ``find / -delete``, download-piped-to-shell one-liners,
+    and ``cp``/``mv``/``tee`` writes to a raw disk or memory device.
     """
     command = _expand_ansi_c_quoting(command)
     patterns = [
@@ -1133,7 +1207,7 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
             i += 1
     tokens = merged
     return (_rm_reason(tokens) or _find_reason(tokens)
-            or _chmod_reason(tokens)
+            or _chmod_reason(tokens) or _raw_device_reason(tokens)
             or _nested_reason(tokens, _depth))
 
 

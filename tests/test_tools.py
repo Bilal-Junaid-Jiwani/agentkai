@@ -133,6 +133,56 @@ def test_exec_blocklist(reg):
         assert result.startswith("ERROR:") and "blocked" in result, cmd
 
 
+def test_exec_blocklist_raw_device_copy_targets(reg):
+    """cp/mv/tee writing to a raw disk or memory device.
+
+    The scan blocked ``dd of=/dev/...`` and ``> /dev/...`` redirects,
+    but the same write spelled as an ordinary copy — ``cp /dev/zero
+    /dev/sda``, ``mv x /dev/sda``, ``tee /dev/sda`` — matched no
+    pattern or token check (verified against ``_is_dangerous`` before
+    the fix). Blocked cases go through exec (safe: exec blocks them);
+    allowed cases use the pure-function scan, since running them
+    would write the target. Precision is preserved: only the
+    destination counts, so copying a device *to* a safe path, writing
+    to a harmless device (``/dev/null``, ``/dev/zero``), and a
+    ``-t`` target directory that is safe stay allowed.
+    """
+    for cmd in ("cp /dev/zero /dev/sda",
+                "cp file /dev/sda",
+                "cp /dev/zero /dev/sda1",
+                "cp /dev/zero /dev/nvme0n1",
+                "cp /dev/zero /dev/nvme0n1p1",
+                "cp /dev/zero /dev/mmcblk0",
+                "cp /dev/zero /dev/mem",
+                "cp -- /dev/zero /dev/sda",
+                "/bin/cp /dev/zero /dev/sda",
+                "sudo cp /dev/zero /dev/sda",
+                "cp -t /dev/sda /dev/zero",
+                "cp --target-directory=/dev/sda /dev/zero",
+                "mv x /dev/sda",
+                "mv x /dev/vda",
+                "tee /dev/sda",
+                "tee -a /dev/nvme0n1",
+                "cp /dev/zero /dev/sda; echo done",
+                "bash -c 'cp /dev/zero /dev/sda'",
+                "eval 'tee /dev/sda'"):
+        result = reg.get("exec").run(command=cmd)
+        assert isinstance(result, str), cmd
+        assert result.startswith("ERROR:") and "blocked" in result, cmd
+    from agentkai.tools import _is_dangerous
+    for cmd in ("cp a /dev/null",
+                "cp a /dev/zero",
+                "cp a /dev/full",
+                "cp a /tmp/b",
+                "cp /dev/sda /tmp/backup",
+                "cp -t /tmp /dev/sda",
+                "cp -rt /tmp /dev/sda",
+                "mv a /tmp/b",
+                "tee /dev/null",
+                "tee /tmp/log"):
+        assert _is_dangerous(cmd) is None, cmd
+
+
 def test_exec_blocklist_chmod_permission_nuke(reg):
     """chmod 777 on / must be blocked however the command ends.
 
