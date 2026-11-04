@@ -3,6 +3,31 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.20] - 2026-11-04
+
+### Fixed
+- **Exec blocklist: raw-device destruction spelled as `install`, and
+  device-wipe commands aimed at a raw device, slipped past the scan.**
+  The scan blocked the same destruction spelled as `dd of=/dev/...`,
+  a `> /dev/...` redirect, or a `cp`/`mv`/`tee` copy — but `install`
+  copies its source onto its destination exactly like `cp`, so
+  `install /dev/zero /dev/sda` overwrote the disk unchecked, and
+  `shred /dev/sda`, `wipefs -a /dev/sda`, and `blkdiscard /dev/sda`
+  matched no pattern or token check at all. The raw-device check now
+  covers `install` with `cp`'s destination rules (last operand, or
+  `-t`/`--target-directory`, including attached and clustered
+  spellings; `install`'s value-taking long options `--mode`/`--owner`/
+  `--group`/`--strip-program` are skipped so they are not mistaken
+  for operands), and a new check blocks `shred`/`wipefs`/`blkdiscard`
+  whose target is a raw device (`/dev/sd*`, `/dev/hd*`, `/dev/vd*`,
+  `/dev/nvme*n*p*`, `/dev/mmcblk*`, `/dev/mem`, `/dev/kmem`,
+  `/dev/port`). Precision is preserved: installing to a safe path,
+  a safe `-t` target, or a harmless device (`/dev/null`,
+  `/dev/zero`), and wiping an ordinary file (`shred /tmp/file`,
+  `wipefs /tmp/disk.img`) stay allowed, and both new checks rescan
+  inside `bash -c`/`eval` payloads. New tests pin the blocked
+  spellings and the allowed ones.
+
 ## [0.6.19] - 2026-11-03
 
 ### Fixed

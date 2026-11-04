@@ -183,6 +183,58 @@ def test_exec_blocklist_raw_device_copy_targets(reg):
         assert _is_dangerous(cmd) is None, cmd
 
 
+def test_exec_blocklist_raw_device_install_and_wipe(reg):
+    """install onto, and shred/wipefs/blkdiscard of, a raw device.
+
+    The scan blocked ``cp``/``mv``/``tee`` writes to a raw device, but
+    the same destruction spelled as ``install /dev/zero /dev/sda``
+    (install copies its source onto the destination, like cp) or as a
+    device-wipe command — ``shred /dev/sda``, ``wipefs -a /dev/sda``,
+    ``blkdiscard /dev/sda`` — matched no pattern or token check
+    (verified against ``_is_dangerous`` before the fix). Blocked cases
+    go through exec (safe: exec blocks them); allowed cases use the
+    pure-function scan, since running them would write the target.
+    Precision is preserved: install's destination rules match cp's
+    (last operand, or ``-t``/``--target-directory``), harmless devices
+    stay allowed, and wiping an ordinary file stays allowed.
+    """
+    for cmd in ("install /dev/zero /dev/sda",
+                "install -m 644 /dev/zero /dev/sda",
+                "install --mode 644 /dev/zero /dev/sda",
+                "install -D /dev/zero /dev/sda",
+                "install -t /dev/sda /dev/zero",
+                "install --target-directory=/dev/sda /dev/zero",
+                "/usr/bin/install /dev/zero /dev/sda",
+                "sudo install /dev/zero /dev/sda",
+                "install /dev/zero /dev/sda; echo done",
+                "bash -c 'install /dev/zero /dev/sda'",
+                "shred /dev/sda",
+                "shred -n 1 /dev/sda",
+                "shred -n1 -z /dev/nvme0n1p1",
+                "wipefs -a /dev/sda",
+                "wipefs /dev/mem",
+                "blkdiscard /dev/sda",
+                "blkdiscard --secure /dev/vda",
+                "/usr/sbin/wipefs -a /dev/sda",
+                "bash -c 'shred /dev/sda'"):
+        result = reg.get("exec").run(command=cmd)
+        assert isinstance(result, str), cmd
+        assert result.startswith("ERROR:") and "blocked" in result, cmd
+    from agentkai.tools import _is_dangerous
+    for cmd in ("install /dev/zero /tmp/backup",
+                "install -m 644 /dev/zero /tmp/backup",
+                "install --mode 644 /dev/zero /tmp/backup",
+                "install --owner root /dev/zero /tmp/backup",
+                "install -t /tmp /dev/zero",
+                "install /dev/zero /dev/null",
+                "shred /tmp/file",
+                "shred -n 1 /tmp/file",
+                "wipefs /dev/null",
+                "wipefs /tmp/disk.img",
+                "blkdiscard /tmp/disk.img"):
+        assert _is_dangerous(cmd) is None, cmd
+
+
 def test_exec_blocklist_chmod_permission_nuke(reg):
     """chmod 777 on / must be blocked however the command ends.
 

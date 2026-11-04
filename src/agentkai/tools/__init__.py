@@ -1083,11 +1083,30 @@ _RAW_DEVICE = re.compile(
     r"|mem|kmem|port)$")
 
 
+# Long options that take a separate value word, per command, for the
+# raw-device checks below. ``install`` copies like ``cp`` (including
+# ``-t``/``--target-directory``), but also takes ``--mode``/``--owner``/
+# ``--group``/``--strip-program`` values that must not be mistaken for
+# operands: ``install --mode 644 /dev/zero /dev/sda`` still writes the
+# device, and ``install --owner root /dev/zero /tmp/x`` still does not.
+_INSTALL_VALUE_OPTIONS = {"--mode", "--owner", "--group", "--strip-program"}
+
+
 def _raw_device_reason(tokens: list[str]) -> str | None:
-    """``cp``/``mv``/``tee`` writing to a raw disk or memory device."""
+    """``cp``/``mv``/``tee``/``install`` writing to a raw disk or memory device.
+
+    ``install`` is the same write spelled as a file install: it copies
+    its source onto the destination, so ``install /dev/zero /dev/sda``
+    overwrites the disk exactly like ``cp /dev/zero /dev/sda`` — but it
+    matched no pattern or token check, since the scan only knew
+    ``cp``/``mv``/``tee`` spellings of a raw device write (verified
+    against ``_is_dangerous`` before this fix). Destination rules match
+    ``cp``: last operand, or ``-t``/``--target-directory`` when given
+    (attached and clustered spellings included).
+    """
     for i, tok in enumerate(tokens):
         name = _basename(tok)
-        if name not in ("cp", "mv", "tee"):
+        if name not in ("cp", "mv", "tee", "install"):
             continue
         args = _args_until_separator(tokens, i + 1)
         operands: list[str] = []
@@ -1105,6 +1124,13 @@ def _raw_device_reason(tokens: list[str]) -> str | None:
                 continue
             if arg.startswith("--target-directory="):
                 target_dir = arg.split("=", 1)[1]
+                j += 1
+                continue
+            if name == "install" and arg in _INSTALL_VALUE_OPTIONS:
+                j += 2
+                continue
+            if name == "install" and arg.startswith(
+                    tuple(o + "=" for o in _INSTALL_VALUE_OPTIONS)):
                 j += 1
                 continue
             if arg.startswith("-") and not arg.startswith("--") and arg != "-":
@@ -1135,6 +1161,39 @@ def _raw_device_reason(tokens: list[str]) -> str | None:
     return None
 
 
+# Commands whose entire purpose is overwriting or erasing their target:
+# ``shred`` writes over it, ``wipefs`` strips its filesystem signatures,
+# ``blkdiscard`` discards its blocks. Aimed at a raw disk or memory
+# device, each destroys it exactly like the ``dd``/``cp`` writes above
+# — but none matched any pattern or token check (verified against
+# ``_is_dangerous`` before this fix). Only raw-device targets count:
+# ``shred /tmp/file`` and ``wipefs /dev/null`` stay allowed, as does
+# every flag spelling (value words such as ``shred -n 1``'s ``1`` are
+# harmless operands that never match the device pattern).
+def _device_wipe_reason(tokens: list[str]) -> str | None:
+    """``shred``/``wipefs``/``blkdiscard`` aimed at a raw device."""
+    for i, tok in enumerate(tokens):
+        if _basename(tok) not in ("shred", "wipefs", "blkdiscard"):
+            continue
+        args = _args_until_separator(tokens, i + 1)
+        operands: list[str] = []
+        j = 0
+        while j < len(args):
+            arg = args[j]
+            if arg == "--":
+                operands.extend(args[j + 1:])
+                break
+            if arg.startswith("-") and arg != "-":
+                j += 1
+                continue
+            operands.append(arg)
+            j += 1
+        for target in operands:
+            if target and _RAW_DEVICE.match(target.strip("\"'").rstrip("/")):
+                return "raw disk wipe"
+    return None
+
+
 def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     """Blocklist scan. Returns a reason string, or None if the command passes.
 
@@ -1148,7 +1207,8 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     including attached (``sh -c'...'``), clustered (``sh -ec '...'``)
     and option-preceded (``bash --norc -c '...'``) ``-c`` spellings —
     and catches ``find / -delete``, download-piped-to-shell one-liners,
-    and ``cp``/``mv``/``tee`` writes to a raw disk or memory device.
+    ``cp``/``mv``/``tee``/``install`` writes to a raw disk or memory
+    device, and ``shred``/``wipefs``/``blkdiscard`` aimed at one.
     """
     command = _expand_ansi_c_quoting(command)
     patterns = [
@@ -1208,6 +1268,7 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     tokens = merged
     return (_rm_reason(tokens) or _find_reason(tokens)
             or _chmod_reason(tokens) or _raw_device_reason(tokens)
+            or _device_wipe_reason(tokens)
             or _nested_reason(tokens, _depth))
 
 
