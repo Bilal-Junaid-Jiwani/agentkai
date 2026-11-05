@@ -1,0 +1,42 @@
+name: install-check
+
+# Release gate: prove the built artifact installs cleanly into an empty
+# virtualenv and runs a real command, starting from outside the source tree.
+# Runs on every release tag (tags are pushed before the PyPI upload) and on
+# demand. If this job fails, the release must NOT be published to PyPI.
+# Note: `python -m build` builds the wheel from the sdist, so a broken
+# sdist already fails the build step.
+#
+# Smoke command choice: `agentkai run` needs a live model provider (API key
+# or a local Ollama server), which a clean CI environment does not have.
+# `agentkai models` is a real command that loads the full provider stack
+# (LiteLLM routing, alias resolution, key detection) end to end and exits
+# non-zero if the installed package is broken.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  install-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the release artifact
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+      - name: Install the built wheel into a clean virtualenv
+        run: |
+          python -m venv "$RUNNER_TEMP/clean-venv"
+          "$RUNNER_TEMP/clean-venv/bin/pip" install --no-cache-dir dist/*.whl
+      - name: Run a real command against the installed package
+        working-directory: ${{ runner.temp }}
+        run: |
+          V="$RUNNER_TEMP/clean-venv"
+          "$V/bin/python" -c "import agentkai; assert 'site-packages' in agentkai.__file__, agentkai.__file__"
+          "$V/bin/agentkai" models
