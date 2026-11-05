@@ -1092,6 +1092,24 @@ _RAW_DEVICE = re.compile(
 _INSTALL_VALUE_OPTIONS = {"--mode", "--owner", "--group", "--strip-program"}
 
 
+def _normalize_device_spelling(tok: str) -> str:
+    """Collapse dot segments / repeated separators in a device spelling.
+
+    The shell resolves ``//``, ``/./`` and ``/../`` before acting, so
+    ``/dev/./sda`` and ``//dev/sda`` name ``/dev/sda`` exactly like the
+    canonical spelling — but the ``_RAW_DEVICE`` match above is literal,
+    so both slipped past the copy and wipe checks. Reuse
+    ``_normalize_path_spelling`` (which already collapses those segments
+    for the ``/``/home checks) and collapse a leading ``//`` too, which
+    POSIX leaves implementation-defined and ``posixpath.normpath``
+    therefore preserves verbatim.
+    """
+    spell = _normalize_path_spelling(tok.strip("\"'"))
+    while spell.startswith("//"):
+        spell = spell[1:]
+    return spell
+
+
 def _raw_device_reason(tokens: list[str]) -> str | None:
     """``cp``/``mv``/``tee``/``install`` writing to a raw disk or memory device.
 
@@ -1156,7 +1174,7 @@ def _raw_device_reason(tokens: list[str]) -> str | None:
         else:
             candidates = []
         for dest in candidates:
-            if dest and _RAW_DEVICE.match(dest.strip("\"'").rstrip("/")):
+            if dest and _RAW_DEVICE.match(_normalize_device_spelling(dest)):
                 return "raw disk write"
     return None
 
@@ -1189,7 +1207,7 @@ def _device_wipe_reason(tokens: list[str]) -> str | None:
             operands.append(arg)
             j += 1
         for target in operands:
-            if target and _RAW_DEVICE.match(target.strip("\"'").rstrip("/")):
+            if target and _RAW_DEVICE.match(_normalize_device_spelling(target)):
                 return "raw disk wipe"
     return None
 
@@ -1208,15 +1226,33 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     and option-preceded (``bash --norc -c '...'``) ``-c`` spellings —
     and catches ``find / -delete``, download-piped-to-shell one-liners,
     ``cp``/``mv``/``tee``/``install`` writes to a raw disk or memory
-    device, and ``shred``/``wipefs``/``blkdiscard`` aimed at one.
+    device, and ``shred``/``wipefs``/``blkdiscard`` aimed at one —
+    including dot-segment / doubled-slash spellings of the device
+    (``/dev/./sda``, ``//dev/sda``) and ``>|`` redirects to one.
     """
     command = _expand_ansi_c_quoting(command)
     patterns = [
         (r":\(\)\s*\{", "fork bomb"),
         (r"\bmkfs(\.\w+)?\b", "filesystem format"),
-        (r"\bdd\b[^\n|;&]*\bof=/dev/", "raw disk write"),
-        (r">\s*/dev/(sd|hd|nvme|vd)[a-z0-9]*", "raw disk write"),
-        (r"\b(sha256sum\s+)?>\s*/dev/(mem|kmem|port)\b", "raw device write"),
+        # The raw-device redirect/``dd`` patterns are spelling-aware
+        # the same way the token checks now are: the shell resolves
+        # ``//``, ``/./`` and ``//`` inside the path before acting, so
+        # ``of=//dev/sda``, ``> //dev/sda``, ``> /dev/./sda`` and
+        # ``> /dev//sda`` name the device exactly like the canonical
+        # spelling but missed the literal ``/dev/`` prefix — and ``>|``
+        # (clobber override) missed the ``>``-then-space shape entirely.
+        # ``(?:\./|/)*`` after ``dev/`` admits only dot/empty segments,
+        # so ``> /dev/../sda`` (a plain file in ``/``) stays allowed.
+        (r"\bdd\b[^\n|;&]*\bof=/+dev/(?:\./|/)*", "raw disk write"),
+        (r">\|?\s*/+dev/(?:\./|/)*(sd|hd|nvme|vd)[a-z0-9]*",
+         "raw disk write"),
+        # The ``\b`` used to sit before the whole optional group, so
+        # it also required a word boundary before a plain ``>`` — and
+        # a spaced redirect (``cat x > /dev/mem``, space before ``>``)
+        # never matched at all. The boundary now applies only to the
+        # ``sha256sum`` alternative, where it belongs.
+        (r"(?:\bsha256sum\s+)?>\|?\s*/+dev/(?:\./|/)*(mem|kmem|port)\b",
+         "raw device write"),
         (r"\b(shutdown|reboot|halt|poweroff)\b", "power control"),
         # The permission-nuke pattern used to require trailing whitespace
         # after "/": the plain "chmod -R 777 /" (end of command, or "/;"

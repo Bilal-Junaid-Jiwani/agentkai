@@ -3,6 +3,33 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.21] - 2026-11-05
+
+### Fixed
+- **Exec blocklist: dot-segment / doubled-slash spellings of a raw
+  device slipped past the scan.** The shell resolves `//`, `/./`
+  and `/../` before acting, so `cp /dev/zero /dev/./sda`,
+  `cp /dev/zero //dev/sda`, and `cp /dev/zero /dev/sda/.` write
+  `/dev/sda` exactly like the canonical spelling — but the raw-device
+  match was literal, so the same write spelled as `cp`/`mv`/`tee`/
+  `install` or as `shred`/`wipefs`/`blkdiscard` of the device went
+  unchecked, including inside `bash -c` payloads and with `-t` /
+  `--target-directory` destinations. The same spellings slipped past
+  the redirect and `dd` patterns too: `> /dev/./sda`,
+  `> //dev/sda`, `> /dev//sda`, `dd of=//dev/sda`, and the `>|`
+  clobber redirect (`>| /dev/sda`) matched no pattern. Device
+  candidates are now normalized (dot segments and repeated
+  separators collapsed, leading `//` folded) before the device
+  match, and the redirect/`dd` patterns admit dot/empty segments
+  and `>|`. Two precision notes: a spaced redirect to a memory
+  device (`cat x > /dev/mem`) also slipped past, because the
+  word-boundary in that pattern required the `>` to be glued to a
+  word — the boundary now applies only to the `sha256sum`
+  alternative; and dot segments that resolve elsewhere stay
+  allowed (`/dev/./null`, `/dev/../tmp/x`, `> /dev/../sda` — a
+  plain file in `/`, not a device). New tests pin the blocked
+  spellings and the allowed ones.
+
 ## [0.6.20] - 2026-11-04
 
 ### Fixed

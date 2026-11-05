@@ -235,6 +235,57 @@ def test_exec_blocklist_raw_device_install_and_wipe(reg):
         assert _is_dangerous(cmd) is None, cmd
 
 
+def test_exec_blocklist_raw_device_dot_segment_spellings(reg):
+    """Dot-segment / doubled-slash spellings of a raw device.
+
+    The shell resolves ``//``, ``/./`` and ``/../`` before acting, so
+    ``cp /dev/zero /dev/./sda`` and ``cp /dev/zero //dev/sda`` write
+    ``/dev/sda`` exactly like the canonical spelling — but the
+    ``_RAW_DEVICE`` match was literal, so both slipped past the copy
+    and wipe checks, and the same spellings (plus ``>|`` clobber
+    redirects) slipped past the ``>``/``dd of=`` patterns (verified
+    against ``_is_dangerous`` before the fix). Blocked cases go
+    through exec (safe: exec blocks them); allowed cases use the
+    pure-function scan, since running them would write the target.
+    Precision is preserved: dot segments that resolve to a harmless
+    device (``/dev/./null``) or a safe path (``/dev/../tmp/x``) stay
+    allowed, as does ``> /dev/../sda`` (a plain file in ``/``).
+    """
+    for cmd in ("cp /dev/zero /dev/./sda",
+                "cp /dev/zero //dev/sda",
+                "cp /dev/zero /dev//sda",
+                "cp /dev/zero /dev/sda/.",
+                "cp /dev/zero /dev/sda/../sdb",
+                "cp -t /dev/./sda /tmp/x",
+                "cp --target-directory=/dev/./sda /tmp/x",
+                "mv /tmp/x /dev/./sda",
+                "install /dev/zero /dev/./sda",
+                "tee /dev/./sda",
+                "shred /dev/./sda",
+                "wipefs -a /dev/./sda",
+                "blkdiscard //dev/sda",
+                "bash -c 'cp /dev/zero /dev/./sda'",
+                "dd if=/dev/zero of=//dev/sda",
+                "cat /dev/zero > /dev/./sda",
+                "cat /dev/zero > //dev/sda",
+                "cat /dev/zero > /dev//sda",
+                "cat /dev/zero >| /dev/sda",
+                "cat /dev/zero > /dev/mem",
+                "cat /dev/zero >| /dev/./mem"):
+        result = reg.get("exec").run(command=cmd)
+        assert isinstance(result, str), cmd
+        assert result.startswith("ERROR:") and "blocked" in result, cmd
+    from agentkai.tools import _is_dangerous
+    for cmd in ("cp /dev/zero /dev/./null",
+                "cp /dev/zero /dev/../tmp/x",
+                "cp /dev/zero /dev/sda/../tmp/x",
+                "shred /dev/./null",
+                "wipefs /dev/./null",
+                "cat /dev/zero > /dev/../sda",
+                "cat /dev/zero > /dev/null"):
+        assert _is_dangerous(cmd) is None, cmd
+
+
 def test_exec_blocklist_chmod_permission_nuke(reg):
     """chmod 777 on / must be blocked however the command ends.
 
