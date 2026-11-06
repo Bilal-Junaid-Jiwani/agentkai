@@ -340,6 +340,7 @@ async def _run_agent(app: FastAPI, store: RunStore, run_id: str,
     except Exception as exc:  # noqa: BLE001 - chat must never die silently
         store.append(run_id, "error",
                      {"message": f"{type(exc).__name__}: {exc}"})
+        store.append(run_id, "run_finished", {"status": "error"})
         store.finish(run_id, "error")
         return
 

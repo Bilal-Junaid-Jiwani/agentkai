@@ -10,6 +10,7 @@ import asyncio
 import json
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 import httpx
@@ -182,6 +183,49 @@ async def test_sse_streams_run_to_finish():
         replay = (await c.get(
             f"/api/runs/{run_id}/events?token={TOKEN}")).json()["events"]
         assert [e["type"] for e in replay] == seen
+
+
+@pytest.mark.asyncio
+async def test_agent_raise_still_closes_event_stream():
+    """Issue #1: when the agent factory (or agent.run) raises, the run
+    must still emit run_finished so the SSE stream closes instead of
+    pinging until the browser disconnects."""
+    def _raising_factory(model_alias, gate):
+        raise RuntimeError("client failed to initialise")
+
+    app = create_app(TOKEN, agent_factory=_raising_factory)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport,
+                                 base_url="http://127.0.0.1") as c:
+        run_id = (await c.post(f"/api/chat?token={TOKEN}",
+                               json={"prompt": "boom"})).json()["run_id"]
+        # wait until the background run is marked error
+        status = None
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            run = (await c.get(f"/api/runs/{run_id}?token={TOKEN}")).json()
+            status = run["status"]
+            if status == "error":
+                break
+            await asyncio.sleep(0.1)
+        assert status == "error"
+        # replay shows the error, then run_finished (error) last
+        replay = (await c.get(
+            f"/api/runs/{run_id}/events?token={TOKEN}")).json()["events"]
+        types = [e["type"] for e in replay]
+        assert "error" in types
+        assert types[-1] == "run_finished"
+        assert replay[-1]["data"]["status"] == "error"
+        # the SSE stream terminates on run_finished instead of pinging
+        seen = []
+        async with c.stream(
+                "GET", f"/api/events?token={TOKEN}&run_id={run_id}",
+                timeout=30) as s:
+            assert s.status_code == 200
+            async for line in s.aiter_lines():
+                if line.startswith("data: "):
+                    seen.append(json.loads(line[6:])["type"])
+        assert seen[-1] == "run_finished"
 
 
 @pytest.mark.asyncio

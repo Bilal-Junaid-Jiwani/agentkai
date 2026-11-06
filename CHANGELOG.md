@@ -3,6 +3,23 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.22] - 2026-11-06
+
+### Fixed
+- **Run event stream never closed when the agent raised (issue #1).**
+  When the agent factory or `agent.run` raised (for example a client
+  that fails to initialise), `_run_agent` appended an `error` event
+  and marked the run `error`, but never appended `run_finished` —
+  unlike the other failure paths (missing key, non-done result).
+  `_event_stream` only stops on `run_finished`, so
+  `/api/events?run_id=` kept sending pings until the browser
+  disconnected, and the run detail view stayed on "running" with the
+  timeline following forever. The `except` path now appends
+  `run_finished` with status `error` before finishing the run,
+  matching the other error paths; replaying a finished run also ends
+  immediately. New test pins it: a raising factory still yields
+  `error` then `run_finished` (error) and the SSE stream terminates.
+
 ## [0.6.21] - 2026-11-05
 
 ### Fixed
