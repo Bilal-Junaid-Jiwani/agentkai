@@ -3,6 +3,28 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.23] - 2026-11-07
+
+### Fixed
+- **Exec blocklist: quoted spellings of a raw device slipped past
+  the redirect / `dd of=` scan.** The shell strips quotes before
+  acting, so `cat x > "/dev/sda"`, `cat x > /dev/"sda"`, and
+  `dd if=/dev/zero of="/dev/sda"` write `/dev/sda` exactly like the
+  unquoted spelling — but the `>` / `dd of=` patterns matched the
+  literal `/dev/` prefix, so every quoted spelling went unchecked,
+  including `$'/dev/sda'` (which `_expand_ansi_c_quoting` re-wraps
+  in quotes, so the pattern still saw a leading quote) and quotes
+  inside the device name (`/dev/s"d"a`) or before it (`/"dev/sda"`).
+  The three patterns now admit one quote at each joint of the device
+  path (after `>` / `of=`, after each `/`, after `dev/`, inside the
+  device name), and the `mem`/`kmem`/`port` name keeps its
+  word-boundary behaviour via a lookahead after an optional trailing
+  quote. Precision is preserved: a quoted harmless path
+  (`"/tmp/out.txt"`), a quoted harmless device (`"/dev/null"`), and
+  `/dev/memory` quoted or not stay allowed, as does a quoted `>`
+  operator (`echo '>' /dev/sda`). New test pins the blocked
+  spellings and the allowed ones.
+
 ## [0.6.22] - 2026-11-06
 
 ### Fixed

@@ -286,6 +286,56 @@ def test_exec_blocklist_raw_device_dot_segment_spellings(reg):
         assert _is_dangerous(cmd) is None, cmd
 
 
+def test_exec_blocklist_quoted_raw_device_spellings(reg):
+    """Quoted spellings of a raw device in a redirect or ``dd of=``.
+
+    The shell strips quotes before acting, so ``cat x > "/dev/sda"``,
+    ``cat x > /dev/"sda"`` and ``dd if=/dev/zero of="/dev/sda"`` write
+    ``/dev/sda`` exactly like the unquoted spelling — but the ``>`` /
+    ``dd of=`` patterns matched the literal ``/dev/`` prefix, so every
+    quoted spelling slipped past (verified against ``_is_dangerous``
+    before the fix). That includes ``$'/dev/sda'``, which
+    ``_expand_ansi_c_quoting`` re-wraps in quotes, so the pattern still
+    saw a leading quote. Blocked cases go through exec (safe: exec
+    blocks them); allowed cases use the pure-function scan, since
+    running them would write the target. Precision is preserved: a
+    quoted harmless path (``"/tmp/out.txt"``) or harmless device
+    (``"/dev/null"``) stays allowed, ``/dev/memory`` stays allowed
+    quoted or not, and a quoted ``>`` operator (``echo '>' /dev/sda``)
+    stays literal.
+    """
+    for cmd in ('cat x > "/dev/sda"',
+                "cat x > '/dev/sda'",
+                'cat x > /dev/"sda"',
+                "cat x > /dev/sd'a'",
+                'cat x > /dev/s"d"a',
+                'cat x > /"dev/sda"',
+                'cat x 2>"/dev/sda"',
+                'cat x >> "/dev/sda"',
+                'cat x >| "/dev/sda"',
+                'cat x > "/dev/mem"',
+                "cat x > '/dev/kmem'",
+                'cat x > "/dev/port"',
+                'cat x > "/dev/nvme0n1p2"',
+                'sha256sum > "/dev/mem"',
+                'dd if=/dev/zero of="/dev/sda"',
+                "dd if=/dev/zero of='/dev/sda'",
+                'dd if=/dev/zero of=/dev/"sda"',
+                "cat x > $'/dev/sda'",
+                "dd if=/dev/zero of=$'/dev/sda'"):
+        result = reg.get("exec").run(command=cmd)
+        assert isinstance(result, str), cmd
+        assert result.startswith("ERROR:") and "blocked" in result, cmd
+    from agentkai.tools import _is_dangerous
+    for cmd in ('cat x > "/tmp/out.txt"',
+                'dd if=/dev/zero of="/tmp/disk.img"',
+                'cat x > "/dev/null"',
+                'cat x > "/dev/memory"',
+                "echo '>' /dev/sda",
+                'echo ">" /dev/sda'):
+        assert _is_dangerous(cmd) is None, cmd
+
+
 def test_exec_blocklist_chmod_permission_nuke(reg):
     """chmod 777 on / must be blocked however the command ends.
 

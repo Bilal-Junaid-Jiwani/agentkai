@@ -1212,6 +1212,18 @@ def _device_wipe_reason(tokens: list[str]) -> str | None:
     return None
 
 
+# A quote the shell strips before acting, allowed between the pieces of
+# a device path in the redirect / ``dd of=`` patterns below: ``"/dev/sda"``,
+# ``'/dev/sda'``, ``/dev/"sda"``, ``/"dev/sda"`` and ``$'/dev/sda'``
+# (re-wrapped in quotes by ``_expand_ansi_c_quoting``) all name the device
+# exactly like ``/dev/sda`` — but the literal ``/dev/`` prefix in those
+# patterns never matched them (verified against ``_is_dangerous`` before
+# this fix). Only the device-path joints admit a quote, so a quoted
+# operator stays literal: ``echo '>' /dev/sda`` is still allowed, and
+# so is a quoted harmless path such as ``"/tmp/out.txt"``.
+_Q = r"""["']?"""
+
+
 def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     """Blocklist scan. Returns a reason string, or None if the command passes.
 
@@ -1228,7 +1240,8 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     ``cp``/``mv``/``tee``/``install`` writes to a raw disk or memory
     device, and ``shred``/``wipefs``/``blkdiscard`` aimed at one —
     including dot-segment / doubled-slash spellings of the device
-    (``/dev/./sda``, ``//dev/sda``) and ``>|`` redirects to one.
+    (``/dev/./sda``, ``//dev/sda``), ``>|`` redirects to one, and
+    quoted spellings of the device path (``"/dev/sda"``, ``/dev/"sda"``).
     """
     command = _expand_ansi_c_quoting(command)
     patterns = [
@@ -1243,15 +1256,31 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
         # (clobber override) missed the ``>``-then-space shape entirely.
         # ``(?:\./|/)*`` after ``dev/`` admits only dot/empty segments,
         # so ``> /dev/../sda`` (a plain file in ``/``) stays allowed.
-        (r"\bdd\b[^\n|;&]*\bof=/+dev/(?:\./|/)*", "raw disk write"),
-        (r">\|?\s*/+dev/(?:\./|/)*(sd|hd|nvme|vd)[a-z0-9]*",
+        # ``_Q`` admits one quote at each joint of the device path (see
+        # its comment above): the shell strips quotes before acting, so
+        # ``> "/dev/sda"``, ``> /dev/"sda"`` and ``of="/dev/sda"`` name
+        # the device too, but used to miss the literal prefix. The
+        # device-name tail admits a quote between letters as well
+        # (``/dev/s"d"a``); the ``mem``/``kmem``/``port`` name keeps its
+        # word-boundary behaviour via the ``(?![a-z0-9])`` lookahead
+        # after an optional trailing quote, so ``/dev/memory`` (quoted
+        # or not) stays allowed.
+        (r"\bdd\b[^\n|;&]*\bof=" + _Q + r"/+" + _Q
+         + r"dev/(?:\./|/)*", "raw disk write"),
+        (r">\|?\s*" + _Q + r"/+" + _Q + r"dev/" + _Q + r"(?:\./|/)*" + _Q
+         + r"(s" + _Q + r"d|h" + _Q + r"d|n" + _Q + r"v" + _Q + r"m" + _Q
+         + r"e|v" + _Q + r"d)(?:" + _Q + r"[a-z0-9])*",
          "raw disk write"),
         # The ``\b`` used to sit before the whole optional group, so
         # it also required a word boundary before a plain ``>`` — and
         # a spaced redirect (``cat x > /dev/mem``, space before ``>``)
         # never matched at all. The boundary now applies only to the
         # ``sha256sum`` alternative, where it belongs.
-        (r"(?:\bsha256sum\s+)?>\|?\s*/+dev/(?:\./|/)*(mem|kmem|port)\b",
+        (r"(?:\bsha256sum\s+)?>\|?\s*" + _Q + r"/+" + _Q + r"dev/" + _Q
+         + r"(?:\./|/)*" + _Q
+         + r"(m" + _Q + r"e" + _Q + r"m|k" + _Q + r"m" + _Q + r"e" + _Q
+         + r"m|p" + _Q + r"o" + _Q + r"r" + _Q + r"t)" + _Q
+         + r"(?![a-z0-9])",
          "raw device write"),
         (r"\b(shutdown|reboot|halt|poweroff)\b", "power control"),
         # The permission-nuke pattern used to require trailing whitespace
