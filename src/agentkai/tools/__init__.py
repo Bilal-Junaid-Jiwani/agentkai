@@ -1110,6 +1110,81 @@ def _normalize_device_spelling(tok: str) -> str:
     return spell
 
 
+_RAW_DEVICE_NAMES: list[str] | None = None
+
+
+def _raw_device_names() -> list[str]:
+    """Representative raw-device names, for glob-spelling checks.
+
+    The names ``_RAW_DEVICE`` matches, enumerated: ``mem`` / ``kmem`` /
+    ``port``; ``sd`` / ``hd`` / ``vd`` with one or two letters and an
+    optional partition (1-15); ``nvme{0..3}n{0..3}`` with an optional
+    ``p`` partition (1-3); ``mmcblk{0..3}`` likewise. Built lazily and
+    cached: a glob pattern is only ever matched against this list, never
+    against the live ``/dev`` — the check must be deterministic in
+    tests and must not depend on which devices this machine happens to
+    have.
+    """
+    global _RAW_DEVICE_NAMES
+    if _RAW_DEVICE_NAMES is None:
+        names = ["mem", "kmem", "port"]
+        letters = [chr(c) for c in range(ord("a"), ord("z") + 1)]
+        bases = letters + [a + b for a in letters for b in letters]
+        for prefix in ("sd", "hd", "vd"):
+            for base in bases:
+                names.append(prefix + base)
+                for part in range(1, 16):
+                    names.append(f"{prefix}{base}{part}")
+        for ctl in range(4):
+            for ns in range(4):
+                names.append(f"nvme{ctl}n{ns}")
+                for part in range(1, 4):
+                    names.append(f"nvme{ctl}n{ns}p{part}")
+        for disk in range(4):
+            names.append(f"mmcblk{disk}")
+            for part in range(1, 4):
+                names.append(f"mmcblk{disk}p{part}")
+        _RAW_DEVICE_NAMES = names
+    return _RAW_DEVICE_NAMES
+
+
+def _is_raw_device_spelling(tok: str) -> bool:
+    """True if *tok* names a raw device after shell expansion.
+
+    Brace groups expand first (``/dev/{sda,sdb}`` is two words, and
+    ``tee`` / ``shred`` take every word, so each expansion counts),
+    then each spelling is checked literally — and a glob spelling is
+    checked segment-wise against the representative device names,
+    since the shell expands ``/dev/sd[a]``, ``/dev/sd?`` and
+    ``/dev/nvme[0-9]n1`` to the device before acting, while the
+    literal ``_RAW_DEVICE`` match never saw them (verified against
+    ``_is_dangerous`` before this fix). A glob is only dangerous when
+    it can match a device path: the pattern must have exactly the
+    ``/dev/<name>`` shape — a pattern under another directory, or
+    with more segments, cannot name one (``/tmp/*`` and
+    ``/dev/pts/*`` stay allowed) — and each segment must fnmatch,
+    with ``*`` never crossing a ``/`` the way the shell's glob works,
+    so ``/*`` stays allowed. Quoted braces expand the same way
+    ``_is_root_or_home`` already expands them.
+    """
+    for expansion in _expand_braces(tok):
+        spell = _normalize_device_spelling(expansion)
+        if not spell:
+            continue
+        if _RAW_DEVICE.match(spell):
+            return True
+        segments = [s for s in spell.split("/") if s != ""]
+        if len(segments) == 2 and fnmatch.fnmatchcase("dev", segments[0]):
+            name = segments[1]
+            if _has_glob(name):
+                if any(fnmatch.fnmatchcase(n, name)
+                       for n in _raw_device_names()):
+                    return True
+            elif _RAW_DEVICE.match("/dev/" + name):
+                return True
+    return False
+
+
 def _raw_device_reason(tokens: list[str]) -> str | None:
     """``cp``/``mv``/``tee``/``install`` writing to a raw disk or memory device.
 
@@ -1174,7 +1249,7 @@ def _raw_device_reason(tokens: list[str]) -> str | None:
         else:
             candidates = []
         for dest in candidates:
-            if dest and _RAW_DEVICE.match(_normalize_device_spelling(dest)):
+            if dest and _is_raw_device_spelling(dest):
                 return "raw disk write"
     return None
 
@@ -1207,7 +1282,7 @@ def _device_wipe_reason(tokens: list[str]) -> str | None:
             operands.append(arg)
             j += 1
         for target in operands:
-            if target and _RAW_DEVICE.match(_normalize_device_spelling(target)):
+            if target and _is_raw_device_spelling(target):
                 return "raw disk wipe"
     return None
 
@@ -1222,6 +1297,33 @@ def _device_wipe_reason(tokens: list[str]) -> str | None:
 # operator stays literal: ``echo '>' /dev/sda`` is still allowed, and
 # so is a quoted harmless path such as ``"/tmp/out.txt"``.
 _Q = r"""["']?"""
+
+
+# Redirects to a raw device (``>`` / ``>|`` / ``>>``): the device-name
+# tail admits a quote between letters (``/dev/s"d"a``), and the
+# ``mem``/``kmem``/``port`` name keeps its word-boundary behaviour via
+# the ``(?![a-z0-9])`` lookahead after an optional trailing quote, so
+# ``/dev/memory`` (quoted or not) stays allowed. Kept at module level
+# so the brace-spelling re-check in ``_is_dangerous`` can reuse the
+# same patterns instead of duplicating them; the spelling rules are
+# explained where they are used, above the ``dd`` pattern.
+_DEVICE_REDIRECT_PATTERNS = [
+    (r">\|?\s*" + _Q + r"/+" + _Q + r"dev/" + _Q + r"(?:\./|/)*" + _Q
+     + r"(s" + _Q + r"d|h" + _Q + r"d|n" + _Q + r"v" + _Q + r"m" + _Q
+     + r"e|v" + _Q + r"d)(?:" + _Q + r"[a-z0-9])*",
+     "raw disk write"),
+    # The ``\b`` used to sit before the whole optional group, so it
+    # also required a word boundary before a plain ``>`` — and a spaced
+    # redirect (``cat x > /dev/mem``, space before ``>``) never matched
+    # at all. The boundary now applies only to the ``sha256sum``
+    # alternative, where it belongs.
+    (r"(?:\bsha256sum\s+)?>\|?\s*" + _Q + r"/+" + _Q + r"dev/" + _Q
+     + r"(?:\./|/)*" + _Q
+     + r"(m" + _Q + r"e" + _Q + r"m|k" + _Q + r"m" + _Q + r"e" + _Q
+     + r"m|p" + _Q + r"o" + _Q + r"r" + _Q + r"t)" + _Q
+     + r"(?![a-z0-9])",
+     "raw device write"),
+]
 
 
 def _is_dangerous(command: str, _depth: int = 0) -> str | None:
@@ -1240,8 +1342,9 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     ``cp``/``mv``/``tee``/``install`` writes to a raw disk or memory
     device, and ``shred``/``wipefs``/``blkdiscard`` aimed at one —
     including dot-segment / doubled-slash spellings of the device
-    (``/dev/./sda``, ``//dev/sda``), ``>|`` redirects to one, and
-    quoted spellings of the device path (``"/dev/sda"``, ``/dev/"sda"``).
+    (``/dev/./sda``, ``//dev/sda``), ``>|`` redirects to one, quoted
+    spellings of the device path (``"/dev/sda"``, ``/dev/"sda"``), and
+    glob / brace spellings (``/dev/sd[a]``, ``/dev/{sda,sdb}``).
     """
     command = _expand_ansi_c_quoting(command)
     patterns = [
@@ -1267,21 +1370,10 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
         # or not) stays allowed.
         (r"\bdd\b[^\n|;&]*\bof=" + _Q + r"/+" + _Q
          + r"dev/(?:\./|/)*", "raw disk write"),
-        (r">\|?\s*" + _Q + r"/+" + _Q + r"dev/" + _Q + r"(?:\./|/)*" + _Q
-         + r"(s" + _Q + r"d|h" + _Q + r"d|n" + _Q + r"v" + _Q + r"m" + _Q
-         + r"e|v" + _Q + r"d)(?:" + _Q + r"[a-z0-9])*",
-         "raw disk write"),
-        # The ``\b`` used to sit before the whole optional group, so
-        # it also required a word boundary before a plain ``>`` — and
-        # a spaced redirect (``cat x > /dev/mem``, space before ``>``)
-        # never matched at all. The boundary now applies only to the
-        # ``sha256sum`` alternative, where it belongs.
-        (r"(?:\bsha256sum\s+)?>\|?\s*" + _Q + r"/+" + _Q + r"dev/" + _Q
-         + r"(?:\./|/)*" + _Q
-         + r"(m" + _Q + r"e" + _Q + r"m|k" + _Q + r"m" + _Q + r"e" + _Q
-         + r"m|p" + _Q + r"o" + _Q + r"r" + _Q + r"t)" + _Q
-         + r"(?![a-z0-9])",
-         "raw device write"),
+        # The redirect patterns live at module level as
+        # ``_DEVICE_REDIRECT_PATTERNS`` (reused by the brace-spelling
+        # re-check below); the spelling rules above apply to them too.
+        *_DEVICE_REDIRECT_PATTERNS,
         (r"\b(shutdown|reboot|halt|poweroff)\b", "power control"),
         # The permission-nuke pattern used to require trailing whitespace
         # after "/": the plain "chmod -R 777 /" (end of command, or "/;"
@@ -1301,6 +1393,22 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     for pattern, reason in patterns:
         if re.search(pattern, command):
             return reason
+    # Brace spellings of a redirect target: the shell expands braces
+    # before acting, so ``> /dev/{sda,sdb}`` and ``>> /dev/{sda,sdb}``
+    # redirect to /dev/sda — but the literal device-name position in
+    # the redirect patterns never matched the leading ``{`` (verified
+    # against ``_is_dangerous`` before this fix). A redirect target is
+    # a single word, so only its FIRST expansion can be the target:
+    # re-check the same patterns against the first-expansion spelling
+    # of the command. A brace group with no comma (``{sda}``) is
+    # literal in the shell and ``_expand_braces`` leaves it alone, so
+    # it stays allowed — as does a harmless first alternative
+    # (``{null,sda}`` redirects to /dev/null).
+    first_expansion = _expand_braces(command)[0]
+    if first_expansion != command:
+        for pattern, reason in _DEVICE_REDIRECT_PATTERNS:
+            if re.search(pattern, first_expansion):
+                return reason
     if _PIPE_TO_SHELL.search(command):
         return "download piped to a shell"
     try:

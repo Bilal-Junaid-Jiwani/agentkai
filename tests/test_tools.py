@@ -967,3 +967,61 @@ def test_registry_describe_exposes_public_metadata(reg):
     assert {e["name"] for e in desc} == set(reg.names())
     # no callables leak into the listing
     assert not any(callable(e["description"]) for e in desc)
+
+
+def test_exec_blocklist_glob_and_brace_raw_device_spellings(reg):
+    """Glob / brace spellings of a raw device in copy / wipe / redirect.
+
+    The shell expands globs and braces before acting, so
+    ``cp /dev/zero /dev/sd[a]``, ``tee /dev/sd?``,
+    ``shred /dev/nvme[0-9]n1`` and ``tee /dev/{sda,sdb}`` all write a
+    raw device exactly like the canonical spelling — but the literal
+    ``_RAW_DEVICE`` match in the copy / wipe token checks never saw
+    them, and a brace group at the start of a redirect target
+    (``> /dev/{sda,sdb}``) never matched the literal device-name
+    position in the redirect patterns (verified against
+    ``_is_dangerous`` before the fix). Blocked cases go through exec
+    (safe: exec blocks them); allowed cases use the pure-function
+    scan, since running them would write the target. Precision is
+    preserved: a glob that cannot match a device (``/dev/ttyS[0-9]``,
+    ``/dev/pts/*``) stays allowed, as does a brace group with no comma
+    (``{sda}`` is literal in the shell) and a harmless first
+    alternative (``{null,zero}``, ``{null,sda}``).
+    """
+    for cmd in ('cp /dev/zero /dev/sd[a]',
+                'cp /dev/zero /dev/sd?',
+                'cp /dev/zero /dev/sd*',
+                'cp /dev/zero /dev/[s]da',
+                'cp /dev/zero /dev/vd[a]',
+                'mv /dev/zero /dev/sd[a]',
+                'install /dev/zero /dev/sd[a]',
+                'tee /dev/sd[a]',
+                'tee /dev/sd?',
+                'tee /dev/sd[a-z]',
+                'tee /dev/nvme[0-9]n1',
+                'tee /dev/{sda,sdb}',
+                'tee /dev/sd{a..z}',
+                'shred /dev/sd[a]',
+                'shred /dev/mmcblk[0-9]',
+                'shred /dev/{sda,sdb}',
+                'blkdiscard /dev/sd[a]',
+                'wipefs /dev/nvme[0-9]n1',
+                'cat x > /dev/{sda,sdb}',
+                'cat x >> /dev/{sda,sdb}',
+                'cat x > /dev/{sda,null}',
+                'cat x > /dev/{s..v}da'):
+        result = reg.get("exec").run(command=cmd)
+        assert isinstance(result, str), cmd
+        assert result.startswith("ERROR:") and "blocked" in result, cmd
+    from agentkai.tools import _is_dangerous
+    for cmd in ('cp /dev/zero /dev/null',
+                'cp /dev/zero /dev/{null,zero}',
+                'tee /dev/{null,zero}',
+                'tee /dev/ttyS[0-9]',
+                'cp /dev/zero /dev/pts/0',
+                'shred /dev/{sda}',
+                'cat x > /dev/{sda}',
+                'cat x > /dev/{null,sda}',
+                'cp /dev/zero /dev/disk/by-id/*',
+                'tee /tmp/*'):
+        assert _is_dangerous(cmd) is None, cmd

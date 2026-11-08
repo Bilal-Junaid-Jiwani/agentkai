@@ -3,6 +3,32 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.24] - 2026-11-08
+
+### Fixed
+- **Exec blocklist: glob / brace spellings of a raw device slipped
+  past the copy / wipe checks and the redirect patterns.** The shell
+  expands globs and braces before acting, so `cp /dev/zero
+  /dev/sd[a]`, `tee /dev/sd?`, `shred /dev/nvme[0-9]n1`, and `tee
+  /dev/{sda,sdb}` write a raw device exactly like the canonical
+  spelling — but the literal `_RAW_DEVICE` match in the
+  `cp`/`mv`/`tee`/`install` and `shred`/`wipefs`/`blkdiscard` token
+  checks never saw them, and a brace group at the start of a
+  redirect target (`cat x > /dev/{sda,sdb}`, `>>` likewise) never
+  matched the literal device-name position in the redirect patterns.
+  The token checks now expand braces first and match glob spellings
+  segment-wise against the representative device names (a glob must
+  have exactly the `/dev/<name>` shape and `*` never crosses a `/`,
+  the way the shell's glob works), and the redirect patterns are
+  re-checked against the command's first brace-expansion — a
+  redirect target is a single word, so only its first expansion can
+  be the target. Precision is preserved: a glob that cannot match a
+  device (`/dev/ttyS[0-9]`, `/dev/pts/*`, `/tmp/*`) stays allowed,
+  as does a brace group with no comma (`{sda}` is literal in the
+  shell) and a harmless first alternative (`{null,zero}`,
+  `{null,sda}`). New test pins the blocked spellings and the
+  allowed ones.
+
 ## [0.6.23] - 2026-11-07
 
 ### Fixed
