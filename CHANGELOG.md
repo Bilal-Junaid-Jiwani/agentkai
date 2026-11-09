@@ -3,6 +3,44 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.25] - 2026-11-09
+
+### Fixed
+- **Exec blocklist: device-mapper / loop / RAID / ramdisk /
+  network-block / stable-symlink spellings of a raw device slipped
+  past the copy / wipe checks and the redirect patterns.** The copy
+  and wipe token checks and the `>` redirect patterns only knew the
+  `sd` / `hd` / `vd`, `nvme`, `mmcblk`, and `mem` / `kmem` / `port`
+  name families, so the same destruction spelled through a
+  device-mapper node (`cp /dev/zero /dev/dm-0`,
+  `tee /dev/mapper/vg-lv`), a loop device (`cp /dev/zero
+  /dev/loop0`), a RAID array (`tee /dev/md0`), a ramdisk (`shred
+  /dev/ram0`), or a network block device (`cp /dev/zero /dev/nbd0`,
+  `/dev/rbd0`) wrote the disk exactly like the canonical spelling —
+  and the stable symlinks under `/dev/disk/by-*/`
+  (`cp /dev/zero /dev/disk/by-id/ata-…`, `by-path`, `by-partuuid`,
+  `by-label`, `by-uuid`, `by-partlabel`) did the same, since their
+  names are arbitrary and no fixed name list can cover them. The
+  redirect patterns never knew `/dev/mmcblk0` either, even though
+  the copy / wipe checks did. The token checks now cover the new
+  name families (literals, globs against the representative-name
+  list, and brace expansions) plus any entry under a `by-*` or
+  `mapper` directory — those directories hold only device nodes, so
+  any name there is a device — and the redirect patterns cover the
+  new families and the by-*/mapper paths, with one quote admitted at
+  each joint of the path the way the quoted spellings already are.
+  Precision is preserved: the by-* and mapper directories themselves
+  are not devices, a bare name with no number (`/dev/loop`,
+  `/dev/md`, `/dev/dm-`) stays allowed, a glob that cannot match a
+  device (`/dev/ttyS[0-9]`, `/dev/pts/*`, `/tmp/*`) stays allowed,
+  and a brace group whose first expansion is a plain directory
+  (`> /dev/{disk,mapper}/x` redirects to `/dev/disk/x` — a redirect
+  target is a single word) stays allowed. Correction to the 0.6.24
+  pin: `cp /dev/zero /dev/disk/by-id/*` was listed as allowed there,
+  but the glob expands to device symlinks — every expansion is a
+  device, so `tee` / `shred` on it write every disk; it is blocked
+  now. New test pins the blocked spellings and the allowed ones.
+
 ## [0.6.24] - 2026-11-08
 
 ### Fixed

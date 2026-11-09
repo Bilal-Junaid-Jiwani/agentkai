@@ -1022,6 +1022,93 @@ def test_exec_blocklist_glob_and_brace_raw_device_spellings(reg):
                 'shred /dev/{sda}',
                 'cat x > /dev/{sda}',
                 'cat x > /dev/{null,sda}',
-                'cp /dev/zero /dev/disk/by-id/*',
                 'tee /tmp/*'):
+        assert _is_dangerous(cmd) is None, cmd
+
+
+def test_exec_blocklist_raw_device_symlink_and_mapper_spellings(reg):
+    """Device-mapper / loop / RAID / ramdisk / network-block / by-* spellings.
+
+    The copy / wipe checks and the ``>`` redirect patterns knew only
+    the ``sd``/``hd``/``vd``, ``nvme``, ``mmcblk``, and
+    ``mem``/``kmem``/``port`` name families, so the same destruction
+    spelled through a device-mapper node (``/dev/dm-0``,
+    ``/dev/mapper/vg-lv``), a loop device (``/dev/loop0``), a RAID
+    array (``/dev/md0``), a ramdisk (``/dev/ram0``), a network block
+    device (``/dev/nbd0``, ``/dev/rbd0``), or a stable symlink under
+    ``/dev/disk/by-*/`` (``by-id``, ``by-path``, ``by-partuuid``,
+    ``by-label``, ``by-uuid``, ``by-partlabel``) slipped past both —
+    and the redirect patterns never knew ``/dev/mmcblk0`` either, even
+    though the copy / wipe checks did (verified against
+    ``_is_dangerous`` before the fix). Blocked cases go through exec
+    (safe: exec blocks them); allowed cases use the pure-function
+    scan, since running them would write the target. Precision is
+    preserved: the by-* and mapper directories themselves are not
+    devices, a bare name with no number (``/dev/loop``, ``/dev/md``,
+    ``/dev/dm-``) is not one, and a brace group whose first expansion
+    is a plain directory (``> /dev/{disk,mapper}/x`` redirects to
+    ``/dev/disk/x`` — a redirect target is a single word) stays
+    allowed. Correction to the 0.6.24 pin: ``cp /dev/zero
+    /dev/disk/by-id/*`` was listed as allowed there, but the glob
+    expands to device symlinks — every expansion is a device, so
+    ``tee`` / ``shred`` on it write every disk; it is blocked now.
+    """
+    for cmd in ('cp /dev/zero /dev/disk/by-id/ata-WDC_WD10EZEX-1234',
+                'cp /dev/zero /dev/disk/by-path/pci-0000:00:1f.2-ata-1',
+                'cp /dev/zero /dev/disk/by-partuuid/1234-01',
+                'cp /dev/zero /dev/disk/by-label/BOOT',
+                'cp /dev/zero /dev/disk/by-uuid/1234-5678',
+                'cp /dev/zero /dev/disk/by-partlabel/root',
+                'cp /dev/zero /dev/disk/by-id/ata-*',
+                'cp /dev/zero /dev/disk/by-id/{ata-X,ata-Y}',
+                'tee /dev/disk/by-id/*',
+                'shred /dev/disk/by-id/*',
+                'mv /dev/zero /dev/disk/by-id/ata-X',
+                'install /dev/zero /dev/disk/by-id/ata-X',
+                'shred /dev/dm-0',
+                'blkdiscard /dev/mapper/vg--lv',
+                'cp /dev/zero /dev/mapper/vg-lv',
+                'tee /dev/dm-0',
+                'install /dev/zero /dev/loop0',
+                'shred /dev/loop0p1',
+                'cp /dev/zero /dev/loop[0-9]',
+                'tee /dev/md[0-9]',
+                'shred /dev/ram0',
+                'cp /dev/zero /dev/nbd0',
+                'cp /dev/zero /dev/rbd0p1',
+                'wipefs /dev/nbd[0-9]',
+                'cat x > /dev/disk/by-id/ata-X',
+                'cat x > /dev/mapper/vg-lv',
+                'cat x > /dev/dm-0',
+                'cat x > /dev/loop0',
+                'cat x > /dev/md0',
+                'cat x > /dev/ram0',
+                'cat x > /dev/nbd0',
+                'cat x > /dev/rbd0',
+                'cat x > /dev/mmcblk0',
+                'cat x > /dev/mmcblk0p1',
+                'cat x > "/dev/disk/by-id/ata-X"',
+                'cat x > /dev/disk/by-id/"ata-X"',
+                'cat x > /dev/disk/"by-id"/ata-X',
+                'cat x > /dev/disk/by-"id"/ata-X',
+                'cat x > /dev/disk/by-id"/ata-X',
+                'cat x > /dev/mapper"/vg-lv',
+                'cat x > /dev/disk/by-id/{ata-X,ata-Y}',
+                'dd if=/dev/zero of=/dev/loop0',
+                'dd if=/dev/zero of=/dev/disk/by-id/ata-X'):
+        result = reg.get("exec").run(command=cmd)
+        assert isinstance(result, str), cmd
+        assert result.startswith("ERROR:") and "blocked" in result, cmd
+    from agentkai.tools import _is_dangerous
+    for cmd in ('cp /dev/zero /dev/disk/by-id',
+                'cp /dev/zero /dev/mapper',
+                'cp /dev/zero /dev/disk',
+                'shred /dev/loop',
+                'cp /dev/zero /dev/md',
+                'cp /dev/zero /dev/dm-',
+                'cp /dev/zero /dev/loop0p1x',
+                'cat x > /dev/disk/by-id',
+                'cat x > /dev/mapper',
+                'cp /dev/zero /dev/disk/by-id/ata-X/extra',
+                'cat x > /dev/{disk,mapper}/x'):
         assert _is_dangerous(cmd) is None, cmd

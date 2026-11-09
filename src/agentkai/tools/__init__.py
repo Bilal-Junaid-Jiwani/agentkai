@@ -1075,12 +1075,36 @@ def _split_shell_operators(tokens: list[str]) -> list[str]:
 # directory is not a device file. ``cp``/``mv`` take their last operand
 # as the destination unless ``-t``/``--target-directory`` names it
 # (attached ``-tDIR`` and clustered ``-rt DIR`` spellings included);
-# ``tee`` writes to every operand.
+# ``tee`` writes to every operand. The same write spelled through a
+# device-mapper node (``/dev/dm-0``, ``/dev/mapper/vg-lv``), a loop
+# device (``/dev/loop0``), a RAID array (``/dev/md0``), a ramdisk
+# (``/dev/ram0``), or a network block device (``/dev/nbd0``,
+# ``/dev/rbd0``) destroys the same data exactly like the canonical
+# spelling — but the literal match above only knew ``sd``/``hd``/``vd``,
+# ``nvme``, ``mmcblk``, and ``mem``/``kmem``/``port``, so all of those
+# slipped past the copy and wipe checks (verified against
+# ``_is_dangerous`` before this fix). The stable symlinks under
+# ``/dev/disk/by-*/`` and the mapper nodes are covered separately in
+# ``_is_raw_device_spelling``: their names are arbitrary, so no fixed
+# name list can enumerate them.
 _RAW_DEVICE = re.compile(
     r"^/dev/(?:(?:sd|hd|vd)[a-z]+[0-9]*"
     r"|nvme[0-9]+n[0-9]+(?:p[0-9]+)?"
     r"|mmcblk[0-9]+(?:p[0-9]+)?"
+    r"|dm-[0-9]+"
+    r"|loop[0-9]+(?:p[0-9]+)?"
+    r"|md[0-9]+"
+    r"|ram[0-9]+"
+    r"|nbd[0-9]+(?:p[0-9]+)?"
+    r"|rbd[0-9]+(?:p[0-9]+)?"
     r"|mem|kmem|port)$")
+
+
+# The ``/dev/disk/`` subdirectories that hold only stable symlinks to
+# block devices: any entry under one names a disk or a partition of
+# one, whatever its (arbitrary, vendor-chosen) name is.
+_DISK_BY_KINDS = ("by-id", "by-path", "by-partuuid", "by-label",
+                  "by-uuid", "by-partlabel")
 
 
 # Long options that take a separate value word, per command, for the
@@ -1119,11 +1143,13 @@ def _raw_device_names() -> list[str]:
     The names ``_RAW_DEVICE`` matches, enumerated: ``mem`` / ``kmem`` /
     ``port``; ``sd`` / ``hd`` / ``vd`` with one or two letters and an
     optional partition (1-15); ``nvme{0..3}n{0..3}`` with an optional
-    ``p`` partition (1-3); ``mmcblk{0..3}`` likewise. Built lazily and
-    cached: a glob pattern is only ever matched against this list, never
-    against the live ``/dev`` — the check must be deterministic in
-    tests and must not depend on which devices this machine happens to
-    have.
+    ``p`` partition (1-3); ``mmcblk{0..3}`` likewise; ``dm-{0..3}``;
+    ``loop{0..7}`` with an optional ``p`` partition (1-3); ``md{0..3}``;
+    ``ram{0..3}``; ``nbd{0..3}`` / ``rbd{0..3}`` with an optional ``p``
+    partition (1-3). Built lazily and cached: a glob pattern is only
+    ever matched against this list, never against the live ``/dev`` —
+    the check must be deterministic in tests and must not depend on
+    which devices this machine happens to have.
     """
     global _RAW_DEVICE_NAMES
     if _RAW_DEVICE_NAMES is None:
@@ -1144,6 +1170,19 @@ def _raw_device_names() -> list[str]:
             names.append(f"mmcblk{disk}")
             for part in range(1, 4):
                 names.append(f"mmcblk{disk}p{part}")
+        for i in range(4):
+            names.append(f"dm-{i}")
+            names.append(f"md{i}")
+            names.append(f"ram{i}")
+            names.append(f"nbd{i}")
+            names.append(f"rbd{i}")
+            for part in range(1, 4):
+                names.append(f"nbd{i}p{part}")
+                names.append(f"rbd{i}p{part}")
+        for i in range(8):
+            names.append(f"loop{i}")
+            for part in range(1, 4):
+                names.append(f"loop{i}p{part}")
         _RAW_DEVICE_NAMES = names
     return _RAW_DEVICE_NAMES
 
@@ -1165,7 +1204,15 @@ def _is_raw_device_spelling(tok: str) -> bool:
     ``/dev/pts/*`` stay allowed) — and each segment must fnmatch,
     with ``*`` never crossing a ``/`` the way the shell's glob works,
     so ``/*`` stays allowed. Quoted braces expand the same way
-    ``_is_root_or_home`` already expands them.
+    ``_is_root_or_home`` already expands them. Stable symlinks under
+    ``/dev/disk/by-*/`` and device-mapper nodes under ``/dev/mapper/``
+    are the exception to the two-segment shape: their names are
+    arbitrary (``ata-WDC_…``, ``vg-lv``), so no name list can cover
+    them — but those directories hold only device nodes, so any entry
+    under one names a disk or a partition of one, literal, brace, or
+    glob (a glob there can only expand to device symlinks). The
+    directories themselves (``/dev/disk/by-id``, ``/dev/mapper``) are
+    not devices.
     """
     for expansion in _expand_braces(tok):
         spell = _normalize_device_spelling(expansion)
@@ -1182,6 +1229,18 @@ def _is_raw_device_spelling(tok: str) -> bool:
                     return True
             elif _RAW_DEVICE.match("/dev/" + name):
                 return True
+        if len(segments) == 4 \
+                and fnmatch.fnmatchcase("dev", segments[0]) \
+                and fnmatch.fnmatchcase("disk", segments[1]) \
+                and any(fnmatch.fnmatchcase(kind, segments[2])
+                        for kind in _DISK_BY_KINDS) \
+                and segments[3]:
+            return True
+        if len(segments) == 3 \
+                and fnmatch.fnmatchcase("dev", segments[0]) \
+                and fnmatch.fnmatchcase("mapper", segments[1]) \
+                and segments[2]:
+            return True
     return False
 
 
@@ -1303,14 +1362,23 @@ _Q = r"""["']?"""
 # tail admits a quote between letters (``/dev/s"d"a``), and the
 # ``mem``/``kmem``/``port`` name keeps its word-boundary behaviour via
 # the ``(?![a-z0-9])`` lookahead after an optional trailing quote, so
-# ``/dev/memory`` (quoted or not) stays allowed. Kept at module level
-# so the brace-spelling re-check in ``_is_dangerous`` can reuse the
-# same patterns instead of duplicating them; the spelling rules are
+# ``/dev/memory`` (quoted or not) stays allowed. The prefix group also
+# covers the device-mapper / loop / RAID / ramdisk / network-block
+# families (``dm-0``, ``loop0``, ``md0``, ``ram0``, ``nbd0``,
+# ``rbd0``) and ``mmcblk`` — the ``mmcblk`` redirect slipped past
+# until now even though the copy / wipe checks already knew it
+# (verified against ``_is_dangerous`` before this fix); the tail
+# admits the hyphen in ``dm-0``. Kept at module level so the
+# brace-spelling re-check in ``_is_dangerous`` can reuse the same
+# patterns instead of duplicating them; the spelling rules are
 # explained where they are used, above the ``dd`` pattern.
 _DEVICE_REDIRECT_PATTERNS = [
     (r">\|?\s*" + _Q + r"/+" + _Q + r"dev/" + _Q + r"(?:\./|/)*" + _Q
      + r"(s" + _Q + r"d|h" + _Q + r"d|n" + _Q + r"v" + _Q + r"m" + _Q
-     + r"e|v" + _Q + r"d)(?:" + _Q + r"[a-z0-9])*",
+     + r"e|v" + _Q + r"d|d" + _Q + r"m|l" + _Q + r"o|m" + _Q + r"m"
+     + _Q + r"c" + _Q + r"b" + _Q + r"l" + _Q + r"k|m" + _Q + r"d"
+     + r"|r" + _Q + r"a|r" + _Q + r"b|n" + _Q + r"b)(?:" + _Q
+     + r"[a-z0-9-])*",
      "raw disk write"),
     # The ``\b`` used to sit before the whole optional group, so it
     # also required a word boundary before a plain ``>`` — and a spaced
@@ -1323,6 +1391,32 @@ _DEVICE_REDIRECT_PATTERNS = [
      + r"m|p" + _Q + r"o" + _Q + r"r" + _Q + r"t)" + _Q
      + r"(?![a-z0-9])",
      "raw device write"),
+    # Stable device symlinks and device-mapper nodes as redirect
+    # targets: ``> /dev/disk/by-id/ata-…`` and ``> /dev/mapper/vg-lv``
+    # write the disk exactly like ``> /dev/sda`` — but the literal
+    # device-name position in the patterns above never matched a
+    # by-*/mapper path, and the names are arbitrary, so no fixed name
+    # can be listed (verified against ``_is_dangerous`` before this
+    # fix). The directory words admit one quote at each joint, the way
+    # the device names above do; the name itself is one word of
+    # device-name characters, each optionally quote-prefixed. A bare
+    # ``/dev/disk/by-id`` or ``/dev/mapper`` directory (no name after
+    # it) is not a device and does not match.
+    (r">\|?\s*" + _Q + r"/+" + _Q + r"dev/" + _Q + r"(?:\./|/)*" + _Q
+     + r"(?:d" + _Q + r"i" + _Q + r"s" + _Q + r"k/" + _Q + r"b" + _Q
+     + r"y" + _Q + r"-" + _Q + r"(?:i" + _Q + r"d"
+     + r"|p" + _Q + r"a" + _Q + r"t" + _Q + r"h"
+     + r"|p" + _Q + r"a" + _Q + r"r" + _Q + r"t" + _Q + r"u" + _Q
+     + r"u" + _Q + r"i" + _Q + r"d"
+     + r"|l" + _Q + r"a" + _Q + r"b" + _Q + r"e" + _Q + r"l"
+     + r"|u" + _Q + r"u" + _Q + r"i" + _Q + r"d"
+     + r"|p" + _Q + r"a" + _Q + r"r" + _Q + r"t" + _Q + r"l" + _Q
+     + r"a" + _Q + r"b" + _Q + r"e" + _Q + r"l"
+     + r")" + _Q + r"/"
+     + r"|m" + _Q + r"a" + _Q + r"p" + _Q + r"p" + _Q + r"e" + _Q + r"r"
+     + _Q + r"/)"
+     + r"(?:" + _Q + r"[A-Za-z0-9_.:+-])+",
+     "raw disk write"),
 ]
 
 
@@ -1344,7 +1438,13 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     including dot-segment / doubled-slash spellings of the device
     (``/dev/./sda``, ``//dev/sda``), ``>|`` redirects to one, quoted
     spellings of the device path (``"/dev/sda"``, ``/dev/"sda"``), and
-    glob / brace spellings (``/dev/sd[a]``, ``/dev/{sda,sdb}``).
+    glob / brace spellings (``/dev/sd[a]``, ``/dev/{sda,sdb}``) — and
+    device-mapper / loop / RAID / ramdisk / network-block spellings
+    (``/dev/dm-0``, ``/dev/loop0``, ``/dev/md0``, ``/dev/ram0``,
+    ``/dev/nbd0``, ``/dev/rbd0``), stable-symlink spellings
+    (``/dev/disk/by-id/ata-…``), and ``/dev/mapper/…`` nodes, in the
+    copy / wipe checks and in the ``>`` redirect patterns (which never
+    knew ``/dev/mmcblk0`` either).
     """
     command = _expand_ansi_c_quoting(command)
     patterns = [
