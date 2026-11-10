@@ -3,6 +3,32 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.26] - 2026-11-10
+
+### Fixed
+- **Exec blocklist: `..` climbs back onto a raw device slipped past
+  the `>` redirect patterns.** The shell resolves `..` segments
+  lexically, so `cat x > /dev/../dev/sda`,
+  `cat x > /dev/mapper/../sda`, and
+  `cat x > /dev/foo/../../dev/sda` write `/dev/sda` exactly like the
+  canonical spelling — but the redirect patterns only admitted dot /
+  empty segments after `dev/`, so every climb spelling went
+  unchecked, even though the `dd of=` pattern (which only needs the
+  `/dev/` prefix) and the copy / wipe token checks (which normpath
+  the target) already blocked their own `..` spellings. The
+  redirect patterns now cover both climb forms — climb then re-enter
+  a `dev/` directory, and one or more `<dir>/../` pairs landing back
+  in `/dev` — for all three device families (disk names,
+  `mem` / `kmem` / `port`, by-*/mapper paths), with one quote
+  admitted at each joint of the climb the way the quoted spellings
+  already are, and the brace re-check covers brace spellings of the
+  climb too. Precision is preserved: a climb that lands outside
+  `/dev` (`> /dev/../sda` is a plain file in `/`,
+  `> /dev/disk/../../sda` likewise) stays allowed, as does a climb
+  that lands on a non-device (`> /dev/a/b/../sda` is `/dev/a/sda`,
+  `> /dev/../dev/null` is `/dev/null`). New test pins the blocked
+  spellings and the allowed ones.
+
 ## [0.6.25] - 2026-11-09
 
 ### Fixed

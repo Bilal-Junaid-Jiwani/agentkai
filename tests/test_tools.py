@@ -1112,3 +1112,59 @@ def test_exec_blocklist_raw_device_symlink_and_mapper_spellings(reg):
                 'cp /dev/zero /dev/disk/by-id/ata-X/extra',
                 'cat x > /dev/{disk,mapper}/x'):
         assert _is_dangerous(cmd) is None, cmd
+
+
+def test_exec_blocklist_raw_device_dotdot_climb_spellings(reg):
+    """``..`` climbs back onto a raw device in a redirect target.
+
+    The shell resolves ``..`` segments lexically, so ``cat x >
+    /dev/../dev/sda``, ``cat x > /dev/mapper/../sda`` and ``cat x >
+    /dev/foo/../../dev/sda`` all write ``/dev/sda`` exactly like the
+    canonical spelling — but the ``>`` redirect patterns only admitted
+    dot / empty segments after ``dev/``, so every climb spelling
+    slipped past them (verified against ``_is_dangerous`` before this
+    fix). The ``dd of=`` pattern already blocked its own ``..``
+    spellings (it only needs the ``/dev/`` prefix) and the copy / wipe
+    token checks normpath their targets, so those are pinned here as
+    already-held. Blocked cases go through exec (safe: exec blocks
+    them); allowed cases use the pure-function scan, since running
+    them would write the target. Precision is preserved: a climb
+    that lands outside ``/dev`` (``> /dev/../sda`` is a plain file in
+    ``/``, ``> /dev/disk/../../sda`` likewise) stays allowed, as does
+    a climb that lands on a non-device (``> /dev/a/b/../sda`` is
+    ``/dev/a/sda``, ``> /dev/../dev/null`` is ``/dev/null``).
+    """
+    for cmd in ('cat x > /dev/../dev/sda',
+                'cat x > /dev/./../dev/sda',
+                'cat x > /dev/foo/../../dev/sda',
+                'cat x >> /dev/../dev/sda',
+                'cat x >| /dev/../dev/sda',
+                'cat x 1>/dev/../dev/sda',
+                'cat x > /dev/mapper/../sda',
+                'cat x > /dev/a/b/../../dev/sda',
+                'cat x > /dev/../dev/mem',
+                'cat x > /dev/../dev/kmem',
+                'cat x > /dev/../dev/nvme0n1',
+                'cat x > /dev/../dev/disk/by-id/ata-X',
+                'cat x > /dev/../dev/mapper/vg-lv',
+                'cat x > "/dev/../dev/sda"',
+                'cat x > /dev/".."/dev/sda',
+                'cat x > /dev/../dev/"sda"',
+                'cat x > /dev/{x,foo}/../dev/sda',
+                'dd if=/dev/zero of=/dev/../dev/sda',
+                'cp /dev/zero /dev/../dev/sda',
+                'tee /dev/../dev/sda',
+                'shred /dev/../dev/sda'):
+        result = reg.get("exec").run(command=cmd)
+        assert isinstance(result, str), cmd
+        assert result.startswith("ERROR:") and "blocked" in result, cmd
+    from agentkai.tools import _is_dangerous
+    for cmd in ('cat x > /dev/../sda',
+                'cat x > /dev/disk/../../sda',
+                'cat x > /dev/foo/../../sda',
+                'cat x > /dev/a/b/../sda',
+                'cat x > /dev/../null',
+                'cat x > /dev/../dev/null',
+                'cat x > /dev/null',
+                'cat x > /tmp/out.txt'):
+        assert _is_dangerous(cmd) is None, cmd

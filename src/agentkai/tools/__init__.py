@@ -1358,6 +1358,42 @@ def _device_wipe_reason(tokens: list[str]) -> str | None:
 _Q = r"""["']?"""
 
 
+# One path segment inside a ``..`` climb, and the ``..`` segment itself,
+# each with a quote admitted at its joints the way the device names
+# admit them above.
+_CLIMB_SEG = _Q + r"""[^/\s"']+""" + _Q
+_CLIMB_DOTDOT = _Q + r"\.\." + _Q
+
+
+# A ``..`` climb that lands back on a device: the shell resolves the
+# segments lexically (the way ``_normalize_path_spelling`` does for the
+# token checks), so ``/dev/../dev/sda`` and ``/dev/foo/../../dev/sda``
+# name ``/dev/sda`` — but the redirect patterns above only admit dot /
+# empty segments after ``dev/``, so every such spelling slipped past
+# them (verified against ``_is_dangerous`` before this fix), even
+# though the ``dd of=`` pattern (which only needs the ``/dev/``
+# prefix) and the copy / wipe token checks (which normpath the target)
+# already blocked their own ``..`` spellings. Two forms land back in
+# ``/dev``: (a) climb, then re-enter a ``dev/`` directory — any run of
+# segments, one ``..``, any run of segments, then a literal ``dev/``;
+# (b) one or more ``<dir>/../`` pairs — ``/dev/mapper/../sda``,
+# ``/dev/a/b/../../sda``. The climb is treated lexically, the same way
+# the token checks are: ``/dev/fd/../sda`` is blocked too even though
+# ``fd`` is a symlink (the redirect would fail there anyway), and a
+# second ``dev/`` swallowed as a climb segment (``/dev/../dev/dev/sda``)
+# is blocked the same way. The tail is the same three families the
+# patterns above know (disk names, ``mem``/``kmem``/``port``, by-*/
+# mapper paths), so the brace re-check in ``_is_dangerous`` covers
+# brace spellings of the climb too.
+_CLIMB = (
+    r"(?:"
+    r"(?:(?:" + _CLIMB_SEG + r"/)*" + _CLIMB_DOTDOT + r"/(?:"
+    + _CLIMB_SEG + r"/)*" + _Q + r"dev/)"
+    r"|(?:(?:" + _CLIMB_SEG + r"/" + _CLIMB_DOTDOT + r"/)+)"
+    r")"
+)
+
+
 # Redirects to a raw device (``>`` / ``>|`` / ``>>``): the device-name
 # tail admits a quote between letters (``/dev/s"d"a``), and the
 # ``mem``/``kmem``/``port`` name keeps its word-boundary behaviour via
@@ -1417,6 +1453,39 @@ _DEVICE_REDIRECT_PATTERNS = [
      + _Q + r"/)"
      + r"(?:" + _Q + r"[A-Za-z0-9_.:+-])+",
      "raw disk write"),
+    # ``..`` climbs back onto a device (see ``_CLIMB`` above):
+    # ``> /dev/../dev/sda``, ``> /dev/mapper/../sda``,
+    # ``> /dev/foo/../../dev/sda``. Precision is preserved: a climb
+    # that lands outside ``/dev`` (``> /dev/../sda`` is a plain file
+    # in ``/``, ``> /dev/disk/../../sda`` likewise) stays allowed, as
+    # does a climb that lands on a non-device
+    # (``> /dev/a/b/../sda`` is ``/dev/a/sda``,
+    # ``> /dev/../dev/null`` is ``/dev/null``).
+    (r">\|?\s*" + _Q + r"/+" + _Q + r"dev/" + _Q + _CLIMB + _Q
+     + r"(?:"
+     + r"(s" + _Q + r"d|h" + _Q + r"d|n" + _Q + r"v" + _Q + r"m" + _Q
+     + r"e|v" + _Q + r"d|d" + _Q + r"m|l" + _Q + r"o|m" + _Q + r"m"
+     + _Q + r"c" + _Q + r"b" + _Q + r"l" + _Q + r"k|m" + _Q + r"d"
+     + r"|r" + _Q + r"a|r" + _Q + r"b|n" + _Q + r"b)(?:" + _Q
+     + r"[a-z0-9-])*"
+     + r"|(m" + _Q + r"e" + _Q + r"m|k" + _Q + r"m" + _Q + r"e" + _Q
+     + r"m|p" + _Q + r"o" + _Q + r"r" + _Q + r"t)" + _Q
+     + r"(?![a-z0-9])"
+     + r"|(?:d" + _Q + r"i" + _Q + r"s" + _Q + r"k/" + _Q + r"b" + _Q
+     + r"y" + _Q + r"-" + _Q + r"(?:i" + _Q + r"d"
+     + r"|p" + _Q + r"a" + _Q + r"t" + _Q + r"h"
+     + r"|p" + _Q + r"a" + _Q + r"r" + _Q + r"t" + _Q + r"u" + _Q
+     + r"u" + _Q + r"i" + _Q + r"d"
+     + r"|l" + _Q + r"a" + _Q + r"b" + _Q + r"e" + _Q + r"l"
+     + r"|u" + _Q + r"u" + _Q + r"i" + _Q + r"d"
+     + r"|p" + _Q + r"a" + _Q + r"r" + _Q + r"t" + _Q + r"l" + _Q
+     + r"a" + _Q + r"b" + _Q + r"e" + _Q + r"l"
+     + r")" + _Q + r"/"
+     + r"|m" + _Q + r"a" + _Q + r"p" + _Q + r"p" + _Q + r"e" + _Q + r"r"
+     + _Q + r"/)"
+     + r"(?:" + _Q + r"[A-Za-z0-9_.:+-])+"
+     + r")",
+     "raw disk write"),
 ]
 
 
@@ -1444,7 +1513,10 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     ``/dev/nbd0``, ``/dev/rbd0``), stable-symlink spellings
     (``/dev/disk/by-id/ata-…``), and ``/dev/mapper/…`` nodes, in the
     copy / wipe checks and in the ``>`` redirect patterns (which never
-    knew ``/dev/mmcblk0`` either).
+    knew ``/dev/mmcblk0`` either) — and ``..`` climbs back onto a
+    device in the redirect patterns (``> /dev/../dev/sda``,
+    ``> /dev/mapper/../sda``, ``> /dev/foo/../../dev/sda``), which
+    the ``dd of=`` pattern and the copy / wipe checks already blocked.
     """
     command = _expand_ansi_c_quoting(command)
     patterns = [
