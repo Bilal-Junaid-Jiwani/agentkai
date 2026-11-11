@@ -1168,3 +1168,107 @@ def test_exec_blocklist_raw_device_dotdot_climb_spellings(reg):
                 'cat x > /dev/null',
                 'cat x > /tmp/out.txt'):
         assert _is_dangerous(cmd) is None, cmd
+
+
+def test_exec_blocklist_format_partition_volume_tools(reg):
+    """Format / partition / volume tools aimed at a raw device.
+
+    Only ``mkfs`` was caught (by a regex), so ``mke2fs``, ``mkswap``,
+    ``fdisk``, ``parted``, ``sgdisk``, ``sfdisk``, ``cryptsetup
+    luksFormat``, ``pvcreate``/``vgcreate`` and their kin all passed
+    the blocklist (verified against ``_is_dangerous`` before this
+    fix). Blocked cases go through exec (safe: exec blocks them);
+    allowed cases use the pure-function scan, since running them
+    would write the target. Precision is preserved: each tool keeps
+    its read-only form (``fdisk -l``, ``sfdisk -d``, ``parted print``,
+    ``sgdisk -p``, ``pvdisplay``/``vgdisplay``, ``cryptsetup
+    luksDump``, the ``mke2fs -n`` / ``zpool create -n`` dry runs),
+    and every one of them stays allowed on a non-device target such
+    as an image file in /tmp.
+    """
+    for cmd in ('mke2fs /dev/sda1',
+                'mke2fs -t ext4 /dev/sda1',
+                'mke2fs -L myfs /dev/sda1',
+                'mkswap /dev/sda1',
+                'mkswap -L swap /dev/sda1',
+                'fdisk /dev/sda',
+                'fdisk /dev/nvme0n1',
+                'sudo fdisk /dev/sda',
+                '/sbin/fdisk /dev/sda',
+                "bash -c 'fdisk /dev/sda'",
+                'parted /dev/sda mklabel gpt',
+                'parted /dev/sda mkpart primary 0 100M',
+                'parted -s /dev/sda mklabel gpt',
+                'parted /dev/sda',
+                'sgdisk -Z /dev/sda',
+                'sgdisk -z /dev/sda',
+                'sgdisk -o /dev/sda',
+                'sgdisk -d 1 /dev/sda',
+                'sgdisk -n 1:0:+1G /dev/sda',
+                'sgdisk /dev/sda',
+                'sgdisk -b /dev/sda -p /dev/sdb',
+                'sfdisk /dev/sda',
+                'sfdisk --delete /dev/sda 1',
+                'sfdisk -b /dev/sda -d /dev/sdb',
+                'cryptsetup luksFormat /dev/sda1',
+                'cryptsetup luksHeaderRestore /dev/sda1',
+                'cryptsetup luksRemoveKey /dev/sda1',
+                'cryptsetup luksKillSlot /dev/sda1 0',
+                'cryptsetup --key-file kf luksFormat /dev/sda1',
+                'pvcreate /dev/sda1',
+                'pvremove /dev/sda1',
+                'vgcreate vg0 /dev/sda1',
+                'vgremove vg0 /dev/sda1',
+                'vgextend vg0 /dev/sdb1',
+                'vgreduce vg0 /dev/sdb1',
+                'lvremove /dev/vg0/lv0',
+                'lvremove /dev/mapper/vg0-lv0',
+                'mdadm --create /dev/md0 --level=1 --raid-devices=2 /dev/sda /dev/sdb',
+                'mdadm -C /dev/md0 -l 1 -n 2 /dev/sda /dev/sdb',
+                'zpool create tank /dev/sda',
+                'mke2fs /dev/../dev/sda1',
+                'sgdisk -Z /dev/disk/by-id/ata-X'):
+        result = reg.get("exec").run(command=cmd)
+        assert isinstance(result, str), cmd
+        assert result.startswith("ERROR:") and "blocked" in result, cmd
+    from agentkai.tools import _is_dangerous
+    for cmd in ('fdisk -l /dev/sda',
+                'fdisk -l',
+                'fdisk -v',
+                'fdisk -x /dev/sda',
+                'sfdisk -d /dev/sda',
+                'sfdisk -l',
+                'sfdisk -V /dev/sda',
+                'sfdisk -s /dev/sda',
+                'sfdisk -J /dev/sda',
+                'parted /dev/sda print',
+                'parted /dev/sda unit s print',
+                'parted /dev/sda align-check optimal 1',
+                'parted -l',
+                'parted --version',
+                'parted /dev/sda help',
+                'sgdisk -p /dev/sda',
+                'sgdisk -v /dev/sda',
+                'sgdisk -i 1 /dev/sda',
+                'sgdisk -L',
+                'sgdisk -b backup.bin -p /dev/sda',
+                'pvdisplay /dev/sda1',
+                'vgdisplay vg0',
+                'lvdisplay /dev/vg0/lv0',
+                'cryptsetup luksDump /dev/sda1',
+                'cryptsetup isLuks /dev/sda1',
+                'cryptsetup status crypt1',
+                'mke2fs -n /dev/sda1',
+                'zpool create -n tank /dev/sda',
+                'zpool status',
+                'zpool list',
+                'mdadm --detail /dev/md0',
+                'mdadm --examine /dev/sda',
+                'mke2fs /tmp/disk.img',
+                'fdisk /tmp/disk.img',
+                'parted /tmp/disk.img mklabel gpt',
+                'pvcreate /tmp/pv.img',
+                'mkswap /tmp/swapfile',
+                'cryptsetup luksFormat /tmp/crypt.img',
+                'vgcreate vg0 /tmp/pv.img'):
+        assert _is_dangerous(cmd) is None, cmd

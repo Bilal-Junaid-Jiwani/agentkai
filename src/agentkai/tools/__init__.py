@@ -1346,6 +1346,308 @@ def _device_wipe_reason(tokens: list[str]) -> str | None:
     return None
 
 
+def _split_tool_args(args: list[str], value_shorts: frozenset | None = None,
+                     value_longs: frozenset | None = None):
+    """Split a tool's args into operands, flags, and option values.
+
+    Short-option clusters are scanned left to right; a short flag in
+    *value_shorts* consumes the rest of its cluster, or the next word,
+    as its value. A long flag in *value_longs* consumes the next word
+    unless its value is attached with ``=``. ``--`` ends option
+    parsing; a bare ``-`` is an operand. Returns ``(operands,
+    short_flags, long_flags, values)`` where *values* is a list of
+    ``(flag, value)`` pairs, so a caller can tell an option's value
+    (e.g. sgdisk's ``-b`` backup file) from a plain operand.
+    """
+    value_shorts = value_shorts or frozenset()
+    value_longs = value_longs or frozenset()
+    operands: list[str] = []
+    shorts: set[str] = set()
+    longs: set[str] = set()
+    values: list[tuple[str, str]] = []
+    j = 0
+    while j < len(args):
+        arg = args[j]
+        if arg == "--":
+            operands.extend(args[j + 1:])
+            break
+        if arg.startswith("--") and len(arg) > 2:
+            name, eq, val = arg[2:].partition("=")
+            longs.add(name)
+            if eq:
+                values.append((name, val))
+            elif name in value_longs and j + 1 < len(args):
+                values.append((name, args[j + 1]))
+                j += 1
+            j += 1
+            continue
+        if arg.startswith("-") and arg != "-":
+            consumed_next = False
+            k = 1
+            while k < len(arg):
+                ch = arg[k]
+                shorts.add(ch)
+                if ch in value_shorts:
+                    if k + 1 < len(arg):
+                        values.append((ch, arg[k + 1:]))
+                    elif j + 1 < len(args):
+                        values.append((ch, args[j + 1]))
+                        consumed_next = True
+                    break
+                k += 1
+            j += 2 if consumed_next else 1
+            continue
+        operands.append(arg)
+        j += 1
+    return operands, shorts, longs, values
+
+
+# Format / partition / volume tools that destroy the raw device they are
+# aimed at: only ``mkfs`` was caught (by a regex), so ``mke2fs``,
+# ``mkswap``, ``fdisk``, ``parted``, ``sgdisk``, ``sfdisk``,
+# ``cryptsetup luksFormat``, ``pvcreate``/``vgcreate`` and their kin all
+# passed the blocklist (verified against ``_is_dangerous`` before this
+# fix). Each is blocked only on a raw-device target — ``mke2fs
+# /tmp/disk.img`` stays allowed — and each keeps its read-only form:
+# ``fdisk -l``, ``sfdisk -d``, ``parted print``, ``sgdisk -p``,
+# ``pvdisplay``/``vgdisplay``, ``cryptsetup luksDump`` and the dry runs
+# (``mke2fs -n``, ``zpool create -n``).
+def _format_device_reason(tokens: list[str]) -> str | None:
+    for i, tok in enumerate(tokens):
+        name = _basename(tok)
+        args = _args_until_separator(tokens, i + 1)
+        if name == "mke2fs":
+            # -n is a dry run (prints what would be done, writes
+            # nothing); every other form creates a filesystem on the
+            # device. Value options per mke2fs usage (-b, -C, -d, -e,
+            # -E, -g, -i, -I, -J, -L, -M, -N, -o, -O, -r, -t, -T, -U,
+            # -z).
+            operands, shorts, _longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset("bCdeEgiIJLMNOortTUz"))
+            if "n" in shorts:
+                continue
+            if any(_is_raw_device_spelling(o) for o in operands):
+                return "filesystem format"
+        elif name == "mkswap":
+            # No dry run exists: -c only checks bad blocks before
+            # writing the swap header. Value options per mkswap --help
+            # (-p pagesize, -L label, -v swapversion, -U uuid,
+            # -e endianness).
+            operands, _shorts, _longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset("pLUve"),
+                value_longs=frozenset(
+                    ("pagesize", "label", "swapversion", "uuid",
+                     "endianness")))
+            if any(_is_raw_device_spelling(o) for o in operands):
+                return "swap format"
+        elif name == "fdisk":
+            # -l lists, -v prints the version, -x lists with extra
+            # detail: all read-only. Anything else opens the disk for
+            # editing (the partition table is written on `w`). Value
+            # options per fdisk --help (-b sector size, -C cylinders,
+            # -H heads, -S sectors, -o output, -u units, -w wipe);
+            # -L/--color takes an optional argument, so it is NOT
+            # value-taking here — `-L /dev/sda` leaves the device an
+            # operand, and consuming it would be a false pass.
+            operands, shorts, longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset("bCHSouw"),
+                value_longs=frozenset(
+                    ("sector-size", "cylinders", "heads", "sectors",
+                     "output", "units", "wipe")))
+            if shorts & {"l", "v", "x"} or longs & {
+                    "list", "version", "list-details"}:
+                continue
+            if any(_is_raw_device_spelling(o) for o in operands):
+                return "partition table edit"
+        elif name == "parted":
+            # parted [options] [device [command]]: -l lists all devices
+            # (read-only). With a raw device, the subcommand decides:
+            # print / help / version / align-check / unit / select
+            # write nothing; no subcommand enters an interactive
+            # session on the disk, and anything else (mklabel, mkpart,
+            # rm, resizepart, set, ...) rewrites the partition table.
+            operands, shorts, longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset("a"),
+                value_longs=frozenset(("align",)))
+            if "l" in shorts or "list" in longs:
+                continue
+            if not operands:
+                continue
+            if not _is_raw_device_spelling(operands[0]):
+                continue
+            if len(operands) < 2:
+                return "partition table edit"
+            if operands[1] in ("print", "help", "version", "align-check",
+                               "unit", "select"):
+                continue
+            return "partition table edit"
+        elif name == "sgdisk":
+            # -p prints, -v verifies, -i shows info, -L lists types:
+            # read-only. Every other operation (-Z zap-all, -z zap, -o
+            # clear, -g/-m convert, -e move header, -d delete, -n new,
+            # -c rename, -t typecode, -u guid, -s sort, -A attributes,
+            # -l load-backup, -R replicate, -x expert) rewrites the
+            # table, and a bare `sgdisk /dev/sda` names the disk for
+            # modification. The -b backup file is a write too, so a
+            # raw-device backup target blocks even with a read-only op.
+            operands, shorts, longs, values = _split_tool_args(
+                args,
+                value_shorts=frozenset("bcdintuAa"),
+                value_longs=frozenset(
+                    ("backup", "change-name", "delete", "info", "new",
+                     "typecode", "partition-guid", "attributes",
+                     "alignment", "load-backup", "replicate")))
+            if any(_is_raw_device_spelling(v)
+                   for flag, v in values if flag in ("b", "backup")):
+                return "raw disk write"
+            if not any(_is_raw_device_spelling(o) for o in operands):
+                continue
+            if shorts & {"Z", "z", "o", "g", "m", "e", "d", "n", "c",
+                         "t", "u", "s", "A", "l", "R", "x"} \
+                    or longs & {"zap-all", "zap", "clear",
+                                "convert-to-gpt", "convert-to-mbr",
+                                "move-second-header", "delete-partitions",
+                                "new", "change-name", "typecode",
+                                "partition-guid", "sort", "attributes",
+                                "load-backup", "replicate", "expert"}:
+                return "partition table edit"
+            if shorts & {"p", "v", "i", "L"} or longs & {
+                    "print", "verify", "info", "list-types"}:
+                continue
+            return "partition table edit"
+        elif name == "sfdisk":
+            # -d dumps, -l lists, -V verifies, -s prints the size, -g
+            # shows geometry, -J dumps JSON, -T lists types, --disk-id
+            # prints the id: read-only. --delete removes partitions,
+            # and a bare `sfdisk /dev/sda` reads a partition script
+            # from stdin and applies it. The -b backup file is a write
+            # too, so a raw-device backup target blocks even with a
+            # read-only op.
+            operands, shorts, longs, values = _split_tool_args(
+                args,
+                value_shorts=frozenset("NoXuYbCHSw"),
+                value_longs=frozenset(
+                    ("output", "units", "label", "label-nested",
+                     "backup", "cylinders", "heads", "sectors",
+                     "wipe")))
+            if any(_is_raw_device_spelling(v)
+                   for flag, v in values if flag in ("b", "backup")):
+                return "raw disk write"
+            if not any(_is_raw_device_spelling(o) for o in operands):
+                continue
+            if "delete" in longs:
+                return "partition table edit"
+            if shorts & {"d", "l", "V", "s", "g", "J", "T"} or longs & {
+                    "dump", "list", "verify", "print-size",
+                    "show-geometry", "json", "list-types", "disk-id"}:
+                continue
+            return "partition table edit"
+        elif name == "cryptsetup":
+            # Only the data-destroying subcommands: luksFormat wipes
+            # the device, luksHeaderRestore overwrites the header,
+            # luksRemoveKey / luksKillSlot destroy access to the data.
+            # Everything else (luksDump, isLuks, status, open, ...) is
+            # left alone. The device is the operand after the
+            # subcommand; value options (-d/--key-file, --header,
+            # --type, --cipher, ...) are skipped so their values are
+            # not mistaken for it.
+            operands, _shorts, _longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset("d"),
+                value_longs=frozenset(
+                    ("key-file", "header", "master-key-file",
+                     "volume-key-file", "type", "cipher", "hash",
+                     "key-size", "sector-size", "uuid", "key-slot",
+                     "token-id", "priority", "pbkdf", "iter-time",
+                     "use-random", "use-urandom", "keyfile-size",
+                     "offset", "skip", "size", "timeout", "tries")))
+            if not operands:
+                continue
+            subcommand = operands[0]
+            if subcommand == "luksFormat":
+                reason = "disk encryption format"
+            elif subcommand == "luksHeaderRestore":
+                reason = "LUKS header restore"
+            elif subcommand in ("luksRemoveKey", "luksKillSlot"):
+                reason = "LUKS key removal"
+            else:
+                continue
+            if any(_is_raw_device_spelling(o) for o in operands[1:]):
+                return reason
+        elif name in ("pvcreate", "pvremove"):
+            # pvcreate writes LVM metadata onto the device; pvremove
+            # strips it. Value options: -u/--uuid, --metadatatype,
+            # --pvmetadatacopies, --dataalignment, --restorefile,
+            # --labelsector, --setphysicalvolumesize.
+            operands, _shorts, _longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset("u"),
+                value_longs=frozenset(
+                    ("uuid", "metadatatype", "pvmetadatacopies",
+                     "dataalignment", "restorefile", "labelsector",
+                     "setphysicalvolumesize", "vgmetadatacopies")))
+            if any(_is_raw_device_spelling(o) for o in operands):
+                return "LVM metadata write"
+        elif name in ("vgcreate", "vgremove", "vgextend", "vgreduce"):
+            # vgcreate claims the devices for a new volume group;
+            # vgextend adds one to an existing group; vgremove /
+            # vgreduce drop one. Value options: -s physical extent
+            # size, -l max logical volumes, -p max physical volumes,
+            # --metadatatype, --vgmetadatacopies.
+            operands, _shorts, _longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset("slp"),
+                value_longs=frozenset(
+                    ("physicalextentsize", "maxlogicalvolumes",
+                     "maxphysicalvolumes", "metadatatype",
+                     "vgmetadatacopies")))
+            if any(_is_raw_device_spelling(o) for o in operands):
+                return "LVM metadata write"
+        elif name == "lvremove":
+            # Removes a logical volume: its path is /dev/mapper/vg-lv
+            # (a raw-device spelling) or /dev/<vg>/<lv>. The two-level
+            # shape is shared with /dev/pts/* and /dev/shm/*, but those
+            # are never valid lvremove targets, so the over-block only
+            # ever hits a nonsense invocation.
+            operands, _shorts, _longs, _vals = _split_tool_args(args)
+            for target in operands:
+                if _is_raw_device_spelling(target):
+                    return "LVM metadata write"
+                segments = [s for s in _normalize_path_spelling(target)
+                            .split("/") if s != ""]
+                if len(segments) == 3 and segments[0] == "dev" \
+                        and segments[1] not in ("disk", "mapper") \
+                        and segments[2]:
+                    return "LVM metadata write"
+        elif name == "mdadm":
+            # Only --create builds a new array (destroying the member
+            # devices); --detail / --examine / --assemble / --stop only
+            # read or manage an existing one. Value options: -l level,
+            # -n raid-devices, -c chunk, -e metadata, -N name, -b
+            # bitmap, -p layout.
+            operands, shorts, longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset("lnceNbp"),
+                value_longs=frozenset(
+                    ("level", "raid-devices", "chunk", "name",
+                     "metadata", "bitmap", "layout", "spare-devices",
+                     "write-journal", "journal", "homehost", "nodes")))
+            if "C" not in shorts and "create" not in longs:
+                continue
+            if any(_is_raw_device_spelling(o) for o in operands):
+                return "RAID array create"
+        elif name == "zpool":
+            # Only `create` builds a pool on the devices; status /
+            # list / get / iostat only read. -n is a dry run (prints
+            # what would be done, writes nothing).
+            operands, shorts, _longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset("oOmRt"),
+                value_longs=frozenset())
+            if not operands or operands[0] != "create":
+                continue
+            if "n" in shorts:
+                continue
+            if any(_is_raw_device_spelling(o) for o in operands[1:]):
+                return "ZFS pool create"
+    return None
+
+
 # A quote the shell strips before acting, allowed between the pieces of
 # a device path in the redirect / ``dd of=`` patterns below: ``"/dev/sda"``,
 # ``'/dev/sda'``, ``/dev/"sda"``, ``/"dev/sda"`` and ``$'/dev/sda'``
@@ -1503,8 +1805,12 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     and option-preceded (``bash --norc -c '...'``) ``-c`` spellings —
     and catches ``find / -delete``, download-piped-to-shell one-liners,
     ``cp``/``mv``/``tee``/``install`` writes to a raw disk or memory
-    device, and ``shred``/``wipefs``/``blkdiscard`` aimed at one —
-    including dot-segment / doubled-slash spellings of the device
+    device, ``shred``/``wipefs``/``blkdiscard`` aimed at one, and
+    format / partition / volume tools aimed at one (``mke2fs``,
+    ``mkswap``, ``fdisk``, ``parted``, ``sgdisk``, ``sfdisk``,
+    ``cryptsetup luksFormat``, ``pvcreate``/``vgcreate`` and kin —
+    each keeping its read-only form) — including dot-segment /
+    doubled-slash spellings of the device
     (``/dev/./sda``, ``//dev/sda``), ``>|`` redirects to one, quoted
     spellings of the device path (``"/dev/sda"``, ``/dev/"sda"``), and
     glob / brace spellings (``/dev/sd[a]``, ``/dev/{sda,sdb}``) — and
@@ -1614,6 +1920,7 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     return (_rm_reason(tokens) or _find_reason(tokens)
             or _chmod_reason(tokens) or _raw_device_reason(tokens)
             or _device_wipe_reason(tokens)
+            or _format_device_reason(tokens)
             or _nested_reason(tokens, _depth))
 
 

@@ -3,6 +3,33 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.27] - 2026-11-11
+
+### Fixed
+- **Exec blocklist: format / partition / volume tools on raw devices
+  passed unchecked.** Only `mkfs` was caught (by a regex), so
+  `mke2fs`, `mkswap`, `fdisk`, `parted`, `sgdisk`, `sfdisk`,
+  `cryptsetup luksFormat`, `pvcreate` / `vgcreate` and their kin all
+  slipped past the blocklist. A new token-level check
+  (`_format_device_reason`, with a shared `_split_tool_args` option
+  parser) now blocks each of them — `mke2fs`, `mkswap`, `fdisk`,
+  `parted` (any destructive subcommand, plus a bare interactive
+  invocation), `sgdisk` (zap / clear / convert / delete / new /
+  load-backup / replicate / expert, plus a bare invocation and a
+  backup file aimed at a device), `sfdisk` (`--delete` and a bare
+  stdin-script invocation), `cryptsetup` (`luksFormat`,
+  `luksHeaderRestore`, `luksRemoveKey`, `luksKillSlot`), `pvcreate` /
+  `pvremove`, `vgcreate` / `vgremove` / `vgextend` / `vgreduce`,
+  `lvremove`, `mdadm --create`, and `zpool create` — whenever their
+  target is a raw device (including `..` climbs, by-id symlinks, and
+  `/dev/mapper/` nodes, via the existing device-spelling check).
+  Precision is preserved: each tool keeps its read-only form
+  (`fdisk -l`, `sfdisk -d`, `parted print`, `sgdisk -p`,
+  `pvdisplay` / `vgdisplay`, `cryptsetup luksDump`, the `mke2fs -n`
+  and `zpool create -n` dry runs), and all of them stay allowed on
+  non-device targets such as image files. New test pins the blocked
+  spellings (42 cases) and the allowed ones (39 cases).
+
 ## [0.6.26] - 2026-11-10
 
 ### Fixed
