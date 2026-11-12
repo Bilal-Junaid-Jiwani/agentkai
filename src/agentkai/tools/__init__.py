@@ -1411,7 +1411,15 @@ def _split_tool_args(args: list[str], value_shorts: frozenset | None = None,
 # /tmp/disk.img`` stays allowed — and each keeps its read-only form:
 # ``fdisk -l``, ``sfdisk -d``, ``parted print``, ``sgdisk -p``,
 # ``pvdisplay``/``vgdisplay``, ``cryptsetup luksDump`` and the dry runs
-# (``mke2fs -n``, ``zpool create -n``).
+# (``mke2fs -n``, ``zpool create -n``). The same hole stayed open for
+# the tools that destroy a disk without partitioning or formatting it:
+# ``cryptsetup erase`` (wipes the LUKS header), ``nvme format`` /
+# ``nvme sanitize`` (erase the whole namespace), ``hdparm
+# --security-erase`` (firmware secure erase) and ``badblocks -w``
+# (destructive write test) — all four passed unchecked (verified
+# against ``_is_dangerous`` before this fix), while their read-only
+# forms (``nvme list`` / ``smart-log``, ``hdparm -I``,
+# ``badblocks`` without ``-w``, ``cryptsetup luksDump``) stay allowed.
 def _format_device_reason(tokens: list[str]) -> str | None:
     for i, tok in enumerate(tokens):
         name = _basename(tok)
@@ -1545,10 +1553,13 @@ def _format_device_reason(tokens: list[str]) -> str | None:
         elif name == "cryptsetup":
             # Only the data-destroying subcommands: luksFormat wipes
             # the device, luksHeaderRestore overwrites the header,
-            # luksRemoveKey / luksKillSlot destroy access to the data.
-            # Everything else (luksDump, isLuks, status, open, ...) is
-            # left alone. The device is the operand after the
-            # subcommand; value options (-d/--key-file, --header,
+            # luksRemoveKey / luksKillSlot destroy access to the data,
+            # and erase wipes the LUKS header outright. Everything else
+            # (luksDump, isLuks, status, open, reencrypt, ...) is left
+            # alone: reencrypt rewrites the device in place but
+            # preserves the data, so it is a maintenance operation,
+            # not a destructive one. The device is the operand after
+            # the subcommand; value options (-d/--key-file, --header,
             # --type, --cipher, ...) are skipped so their values are
             # not mistaken for it.
             operands, _shorts, _longs, _vals = _split_tool_args(
@@ -1569,6 +1580,8 @@ def _format_device_reason(tokens: list[str]) -> str | None:
                 reason = "LUKS header restore"
             elif subcommand in ("luksRemoveKey", "luksKillSlot"):
                 reason = "LUKS key removal"
+            elif subcommand == "erase":
+                reason = "LUKS header erase"
             else:
                 continue
             if any(_is_raw_device_spelling(o) for o in operands[1:]):
@@ -1645,6 +1658,65 @@ def _format_device_reason(tokens: list[str]) -> str | None:
                 continue
             if any(_is_raw_device_spelling(o) for o in operands[1:]):
                 return "ZFS pool create"
+        elif name == "nvme":
+            # Only `format` and `sanitize` destroy the namespace:
+            # format erases every block, sanitize crypto-erases /
+            # block-erases the whole device. Everything else (list,
+            # smart-log, id-ctrl, id-ns, get-feature, ...) only reads.
+            # Value options per nvme --help: format takes -s/--ses,
+            # -l/--lbaf, -i/--pi, -p/--pil, -m/--ms, -n/--namespace-id;
+            # sanitize takes -a/--sanact and -p/--ovrpat. A value is
+            # never a device in legitimate use, so a device spelling
+            # in either position blocks — it is either an evasion
+            # attempt (``-a /dev/nvme0n1``) or nonsense that would
+            # fail in nvme anyway.
+            operands, _shorts, _longs, values = _split_tool_args(
+                args, value_shorts=frozenset("slipmna"),
+                value_longs=frozenset(
+                    ("ses", "lbaf", "pi", "pil", "ms",
+                     "namespace-id", "sanact", "ovrpat")))
+            if not operands or operands[0] not in ("format",
+                                                    "sanitize"):
+                continue
+            targets = list(operands[1:]) + [v for _f, v in values]
+            if any(_is_raw_device_spelling(o) for o in targets):
+                return ("NVMe namespace format" if operands[0] == "format"
+                        else "NVMe sanitize")
+        elif name == "hdparm":
+            # Only the firmware secure-erase forms destroy the disk:
+            # --security-erase / --security-erase-enhanced wipe every
+            # sector (the password is the option's value, consumed
+            # above so it is never mistaken for the device). The
+            # read-only forms (-I, -g, --security-freeze is a lock,
+            # not a wipe) and password management (--security-set-pass,
+            # --security-unlock, --security-disable) stay allowed:
+            # they lock or unlock the drive but destroy no data.
+            operands, _shorts, longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset(""),
+                value_longs=frozenset(
+                    ("security-erase", "security-erase-enhanced",
+                     "security-set-pass", "security-unlock",
+                     "security-disable", "user-master")))
+            if not longs & {"security-erase",
+                           "security-erase-enhanced"}:
+                continue
+            if any(_is_raw_device_spelling(o) for o in operands):
+                return "firmware secure erase"
+        elif name == "badblocks":
+            # Only -w is a destructive write test: it writes test
+            # patterns over every block. The default read-only scan
+            # and -n (non-destructive read-write: patterns are written
+            # then the original data restored) stay allowed. Value
+            # options per badblocks usage (-b block size, -c blocks at
+            # once, -e max bad blocks, -o output file, -t test
+            # pattern, -i input file).
+            operands, shorts, _longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset("bceoti"),
+                value_longs=frozenset())
+            if "w" not in shorts:
+                continue
+            if any(_is_raw_device_spelling(o) for o in operands):
+                return "destructive disk test"
     return None
 
 
@@ -1808,8 +1880,10 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     device, ``shred``/``wipefs``/``blkdiscard`` aimed at one, and
     format / partition / volume tools aimed at one (``mke2fs``,
     ``mkswap``, ``fdisk``, ``parted``, ``sgdisk``, ``sfdisk``,
-    ``cryptsetup luksFormat``, ``pvcreate``/``vgcreate`` and kin —
-    each keeping its read-only form) — including dot-segment /
+    ``cryptsetup luksFormat`` / ``erase``, ``pvcreate``/``vgcreate``
+    and kin, ``nvme format`` / ``sanitize``, ``hdparm
+    --security-erase``, ``badblocks -w`` — each keeping its read-only
+    form) — including dot-segment /
     doubled-slash spellings of the device
     (``/dev/./sda``, ``//dev/sda``), ``>|`` redirects to one, quoted
     spellings of the device path (``"/dev/sda"``, ``/dev/"sda"``), and

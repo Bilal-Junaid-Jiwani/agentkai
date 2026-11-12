@@ -1272,3 +1272,68 @@ def test_exec_blocklist_format_partition_volume_tools(reg):
                 'cryptsetup luksFormat /tmp/crypt.img',
                 'vgcreate vg0 /tmp/pv.img'):
         assert _is_dangerous(cmd) is None, cmd
+
+
+def test_exec_blocklist_disk_destroy_tools(reg):
+    """Disk-destroying tools that format / partition nothing.
+
+    ``cryptsetup erase`` (wipes the LUKS header), ``nvme format`` /
+    ``nvme sanitize`` (erase the whole namespace), ``hdparm
+    --security-erase`` (firmware secure erase) and ``badblocks -w``
+    (destructive write test) all destroy the disk they are aimed at
+    without formatting or partitioning it — and all four passed the
+    blocklist unchecked (verified against ``_is_dangerous`` before
+    this fix). Blocked cases go through exec (safe: exec blocks
+    them); allowed cases use the pure-function scan, since running
+    them would write the target. Precision is preserved: each tool
+    keeps its read-only form (``nvme list`` / ``smart-log``,
+    ``hdparm -I``, ``badblocks`` without ``-w``, ``cryptsetup
+    luksDump`` / ``reencrypt``), ``hdparm``'s password management
+    (``--security-set-pass`` / ``--security-unlock``) stays allowed —
+    it locks the drive but destroys no data — and every one of them
+    stays allowed on a non-device target such as an image file in
+    /tmp.
+    """
+    for cmd in ('cryptsetup erase /dev/sda',
+                'cryptsetup erase --header /tmp/hdr /dev/sda',
+                'cryptsetup erase -d /tmp/key /dev/sda1',
+                'sudo cryptsetup erase /dev/sda',
+                "bash -c 'cryptsetup erase /dev/sda'",
+                'cryptsetup erase /dev/../dev/sda',
+                'nvme format /dev/nvme0n1',
+                'nvme format --ses=1 /dev/nvme0n1',
+                'nvme format -s 1 --lbaf 0 /dev/nvme0n1',
+                'nvme format /dev/nvme0n1 --force',
+                'nvme format /dev/disk/by-id/nvme-X',
+                'nvme sanitize /dev/nvme0n1',
+                'nvme sanitize -a 2 /dev/nvme0n1',
+                'nvme sanitize --sanact=4 /dev/nvme0n1',
+                'hdparm --security-erase NULL /dev/sda',
+                'hdparm --security-erase-enhanced NULL /dev/sda',
+                'hdparm --user-master u --security-erase pass /dev/sda',
+                'badblocks -w /dev/sda',
+                'badblocks -w -s /dev/sda',
+                'badblocks -w -b 4096 /dev/sda1',
+                'badblocks -svw /dev/sda'):
+        result = reg.get("exec").run(command=cmd)
+        assert isinstance(result, str), cmd
+        assert result.startswith("ERROR:") and "blocked" in result, cmd
+    from agentkai.tools import _is_dangerous
+    for cmd in ('nvme list',
+                'nvme smart-log /dev/nvme0n1',
+                'nvme id-ctrl /dev/nvme0n1',
+                'nvme get-feature /dev/nvme0n1 -f 1',
+                'hdparm -I /dev/sda',
+                'hdparm -t /dev/sda',
+                'hdparm --security-set-pass pass /dev/sda',
+                'hdparm --security-unlock pass /dev/sda',
+                'badblocks -v /dev/sda',
+                'badblocks -n /dev/sda',
+                'cryptsetup luksDump /dev/sda',
+                'cryptsetup reencrypt /dev/sda1',
+                'cryptsetup status cryptvol',
+                'cryptsetup erase /tmp/crypt.img',
+                'nvme format /tmp/nvme.img',
+                'hdparm --security-erase NULL /tmp/disk.img',
+                'badblocks -w /tmp/disk.img'):
+        assert _is_dangerous(cmd) is None, cmd

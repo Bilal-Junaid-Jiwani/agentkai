@@ -3,6 +3,28 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.28] - 2026-11-12
+
+### Fixed
+- **Exec blocklist: disk-destroying tools that format / partition
+  nothing slipped past unchecked.** `cryptsetup erase` wipes the
+  LUKS header, `nvme format` / `nvme sanitize` erase the whole
+  namespace, `hdparm --security-erase` / `--security-erase-enhanced`
+  wipe every sector in firmware, and `badblocks -w` writes test
+  patterns over every block — none of them formats or partitions,
+  so none of them matched the format / partition / volume checks
+  added in 0.6.27. They are now blocked whenever their target is a
+  raw device (including `..` climbs, by-id symlinks, and
+  `/dev/mapper/` nodes, via the existing device-spelling check).
+  Precision is preserved: each tool keeps its read-only form
+  (`nvme list` / `smart-log` / `id-ctrl`, `hdparm -I`, `badblocks`
+  without `-w`, `cryptsetup luksDump` / `reencrypt`), `hdparm`'s
+  password management (`--security-set-pass` / `--security-unlock`)
+  stays allowed — it locks the drive but destroys no data — and all
+  of them stay allowed on non-device targets such as image files.
+  New test pins the blocked spellings (21 cases) and the allowed
+  ones (17 cases).
+
 ## [0.6.27] - 2026-11-11
 
 ### Fixed
