@@ -3,6 +3,33 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.29] - 2026-11-13
+
+### Fixed
+- **Exec blocklist: destroy forms that erase data without creating,
+  formatting or partitioning anything slipped past unchecked.**
+  `mdadm --zero-superblock` wipes a member's RAID metadata,
+  `zpool destroy` wipes a whole pool, `zfs destroy` wipes a dataset
+  or snapshot, `zfs rollback` destroys every snapshot newer than its
+  target, and `hdparm --write-sector` / `--make-bad-sector` /
+  `--trim-sector-ranges` write, corrupt or discard raw sectors —
+  none of them creates, formats or partitions, so none of them
+  matched the format / partition / volume checks added in 0.6.27
+  and the disk-destroy checks added in 0.6.28. They are now blocked
+  (`mdadm --zero-superblock` and the `hdparm` sector writes only
+  on a raw-device target, via the existing device-spelling check;
+  `zpool destroy` / `zfs destroy` / `zfs rollback` on any pool or
+  dataset name, since the pool or dataset IS the data — the same
+  way `lvremove` blocks a volume by name). Precision is preserved:
+  each tool keeps its read-only form (`mdadm --detail` /
+  `--examine` / `--assemble` / `--stop`, `zpool status` / `list`,
+  `zfs list` / `snapshot` / `get`, `hdparm -I` / `--read-sector` /
+  `--security-freeze` / `--security-set-pass`), the dry runs
+  (`zpool destroy -n`, `zfs destroy -n`) stay allowed, and all of
+  them stay allowed on non-device targets such as image files. New
+  test pins the blocked spellings (22 cases) and the allowed ones
+  (20 cases).
+
 ## [0.6.28] - 2026-11-12
 
 ### Fixed

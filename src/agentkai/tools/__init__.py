@@ -1420,6 +1420,18 @@ def _split_tool_args(args: list[str], value_shorts: frozenset | None = None,
 # against ``_is_dangerous`` before this fix), while their read-only
 # forms (``nvme list`` / ``smart-log``, ``hdparm -I``,
 # ``badblocks`` without ``-w``, ``cryptsetup luksDump``) stay allowed.
+# The same hole stayed open for the destroy forms that erase data
+# without creating, formatting or partitioning anything: ``mdadm
+# --zero-superblock`` (wipes a member's RAID metadata), ``zpool
+# destroy`` / ``zfs destroy`` (wipe a pool / dataset) and ``zfs
+# rollback`` (destroys every snapshot newer than the target), and
+# ``hdparm --write-sector`` / ``--make-bad-sector`` /
+# ``--trim-sector-ranges`` (write, corrupt or discard raw sectors) —
+# all passed unchecked (verified against ``_is_dangerous`` before
+# this fix), while their read-only forms (``mdadm --detail`` /
+# ``--examine``, ``zpool status`` / ``list``, ``zfs list`` /
+# ``snapshot``, ``hdparm -I`` / ``--read-sector``) and the dry runs
+# (``zpool destroy -n``, ``zfs destroy -n``) stay allowed.
 def _format_device_reason(tokens: list[str]) -> str | None:
     for i, tok in enumerate(tokens):
         name = _basename(tok)
@@ -1630,34 +1642,65 @@ def _format_device_reason(tokens: list[str]) -> str | None:
                         and segments[2]:
                     return "LVM metadata write"
         elif name == "mdadm":
-            # Only --create builds a new array (destroying the member
-            # devices); --detail / --examine / --assemble / --stop only
-            # read or manage an existing one. Value options: -l level,
-            # -n raid-devices, -c chunk, -e metadata, -N name, -b
-            # bitmap, -p layout.
+            # --create builds a new array (destroying the member
+            # devices) and --zero-superblock wipes the RAID metadata
+            # off a member, dropping it from its array; --detail /
+            # --examine / --assemble / --stop only read or manage an
+            # existing one. Value options: -l level, -n raid-devices,
+            # -c chunk, -e metadata, -N name, -b bitmap, -p layout.
             operands, shorts, longs, _vals = _split_tool_args(
                 args, value_shorts=frozenset("lnceNbp"),
                 value_longs=frozenset(
                     ("level", "raid-devices", "chunk", "name",
                      "metadata", "bitmap", "layout", "spare-devices",
                      "write-journal", "journal", "homehost", "nodes")))
-            if "C" not in shorts and "create" not in longs:
+            if not any(_is_raw_device_spelling(o) for o in operands):
                 continue
-            if any(_is_raw_device_spelling(o) for o in operands):
+            if "C" in shorts or "create" in longs:
                 return "RAID array create"
+            if "zero-superblock" in longs:
+                return "RAID superblock wipe"
         elif name == "zpool":
-            # Only `create` builds a pool on the devices; status /
-            # list / get / iostat only read. -n is a dry run (prints
-            # what would be done, writes nothing).
+            # `create` builds a pool on the devices and `destroy`
+            # wipes a whole pool; status / list / get / iostat only
+            # read. -n is a dry run (prints what would be done,
+            # writes nothing). `destroy` takes a pool name, not a
+            # device path — but the pool IS the data, so any destroy
+            # except the -n dry run blocks, the same way `lvremove`
+            # blocks a volume by name.
             operands, shorts, _longs, _vals = _split_tool_args(
                 args, value_shorts=frozenset("oOmRt"),
                 value_longs=frozenset())
-            if not operands or operands[0] != "create":
+            if not operands or operands[0] not in ("create",
+                                                    "destroy"):
                 continue
             if "n" in shorts:
                 continue
-            if any(_is_raw_device_spelling(o) for o in operands[1:]):
-                return "ZFS pool create"
+            if operands[0] == "create":
+                if any(_is_raw_device_spelling(o)
+                       for o in operands[1:]):
+                    return "ZFS pool create"
+            else:
+                return "ZFS pool destroy"
+        elif name == "zfs":
+            # `destroy` wipes a dataset (or a snapshot) and `rollback`
+            # destroys every snapshot newer than the target; list /
+            # get / snapshot / clone only read or create. -n is a dry
+            # run for destroy (prints what would be done, writes
+            # nothing); rollback has no dry run, so every rollback
+            # blocks. The operand is a dataset name, not a device
+            # path — but the dataset IS the data, so the name itself
+            # is the target, the same way `lvremove` blocks a volume
+            # by name.
+            operands, shorts, _longs, _vals = _split_tool_args(args)
+            if not operands or operands[0] not in ("destroy",
+                                                    "rollback"):
+                continue
+            if operands[0] == "destroy" and "n" in shorts:
+                continue
+            return ("ZFS dataset destroy"
+                    if operands[0] == "destroy"
+                    else "ZFS snapshot rollback")
         elif name == "nvme":
             # Only `format` and `sanitize` destroy the namespace:
             # format erases every block, sanitize crypto-erases /
@@ -1683,12 +1726,18 @@ def _format_device_reason(tokens: list[str]) -> str | None:
                 return ("NVMe namespace format" if operands[0] == "format"
                         else "NVMe sanitize")
         elif name == "hdparm":
-            # Only the firmware secure-erase forms destroy the disk:
+            # The firmware secure-erase forms destroy the disk:
             # --security-erase / --security-erase-enhanced wipe every
             # sector (the password is the option's value, consumed
-            # above so it is never mistaken for the device). The
-            # read-only forms (-I, -g, --security-freeze is a lock,
-            # not a wipe) and password management (--security-set-pass,
+            # above so it is never mistaken for the device) — and so
+            # do the sector-write forms: --write-sector writes a
+            # sector's worth of arbitrary data, --make-bad-sector
+            # corrupts one, and --trim-sector-ranges discards the
+            # listed ranges (the ranges are plain operands, never a
+            # device spelling, so the device check below still only
+            # fires on the disk). The read-only forms (-I, -g,
+            # --read-sector, --security-freeze is a lock, not a wipe)
+            # and password management (--security-set-pass,
             # --security-unlock, --security-disable) stay allowed:
             # they lock or unlock the drive but destroy no data.
             operands, _shorts, longs, _vals = _split_tool_args(
@@ -1696,12 +1745,18 @@ def _format_device_reason(tokens: list[str]) -> str | None:
                 value_longs=frozenset(
                     ("security-erase", "security-erase-enhanced",
                      "security-set-pass", "security-unlock",
-                     "security-disable", "user-master")))
+                     "security-disable", "user-master",
+                     "write-sector", "make-bad-sector")))
             if not longs & {"security-erase",
-                           "security-erase-enhanced"}:
+                           "security-erase-enhanced",
+                           "write-sector", "trim-sector-ranges",
+                           "make-bad-sector"}:
                 continue
             if any(_is_raw_device_spelling(o) for o in operands):
-                return "firmware secure erase"
+                if longs & {"security-erase",
+                           "security-erase-enhanced"}:
+                    return "firmware secure erase"
+                return "firmware sector write"
         elif name == "badblocks":
             # Only -w is a destructive write test: it writes test
             # patterns over every block. The default read-only scan
@@ -1882,8 +1937,10 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     ``mkswap``, ``fdisk``, ``parted``, ``sgdisk``, ``sfdisk``,
     ``cryptsetup luksFormat`` / ``erase``, ``pvcreate``/``vgcreate``
     and kin, ``nvme format`` / ``sanitize``, ``hdparm
-    --security-erase``, ``badblocks -w`` — each keeping its read-only
-    form) — including dot-segment /
+    --security-erase`` / sector writes, ``badblocks -w``,
+    ``mdadm --zero-superblock``, ``zpool destroy``, ``zfs destroy``
+    / ``rollback`` — each keeping its read-only form) — including
+    dot-segment /
     doubled-slash spellings of the device
     (``/dev/./sda``, ``//dev/sda``), ``>|`` redirects to one, quoted
     spellings of the device path (``"/dev/sda"``, ``/dev/"sda"``), and

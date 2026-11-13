@@ -1337,3 +1337,73 @@ def test_exec_blocklist_disk_destroy_tools(reg):
                 'hdparm --security-erase NULL /tmp/disk.img',
                 'badblocks -w /tmp/disk.img'):
         assert _is_dangerous(cmd) is None, cmd
+
+
+def test_exec_blocklist_volume_destroy_tools(reg):
+    """Destroy forms that erase data without creating anything.
+
+    ``mdadm --zero-superblock`` (wipes a member's RAID metadata),
+    ``zpool destroy`` (wipes a whole pool), ``zfs destroy`` (wipes
+    a dataset or snapshot) and ``zfs rollback`` (destroys every
+    snapshot newer than the target), and ``hdparm --write-sector`` /
+    ``--make-bad-sector`` / ``--trim-sector-ranges`` (write, corrupt
+    or discard raw sectors) all passed the blocklist unchecked
+    (verified against ``_is_dangerous`` before this fix). Blocked
+    cases go through exec (safe: exec blocks them); allowed cases
+    use the pure-function scan, since running them would write the
+    target. Precision is preserved: each tool keeps its read-only
+    form (``mdadm --detail`` / ``--examine`` / ``--assemble`` /
+    ``--stop``, ``zpool status`` / ``list``, ``zfs list`` /
+    ``snapshot`` / ``get``, ``hdparm -I`` / ``--read-sector`` /
+    ``--security-freeze`` / ``--security-set-pass``) and the dry
+    runs (``zpool destroy -n``, ``zfs destroy -n``), and every one
+    of them stays allowed on a non-device target such as an image
+    file in /tmp.
+    """
+    for cmd in ('mdadm --zero-superblock /dev/sda',
+                'mdadm --zero-superblock /dev/sda1 /dev/sdb1',
+                'mdadm --zero-superblock --force /dev/sda',
+                'sudo mdadm --zero-superblock /dev/sda',
+                "bash -c 'mdadm --zero-superblock /dev/sda'",
+                'mdadm --zero-superblock /dev/../dev/sda',
+                'zpool destroy tank',
+                'zpool destroy -f tank',
+                'zpool destroy -r tank',
+                'sudo zpool destroy tank',
+                "bash -c 'zpool destroy tank'",
+                'zfs destroy tank/data',
+                'zfs destroy -r tank/data',
+                'zfs destroy tank/data@snap',
+                'zfs rollback tank/data@snap',
+                'zfs rollback -r tank/data@snap',
+                'hdparm --write-sector 123 /dev/sda',
+                'hdparm --write-sector 123 --yes-i-know-what-i-am-doing /dev/sda',
+                'hdparm --trim-sector-ranges 100:10 /dev/sda',
+                'hdparm --trim-sector-ranges 100:10 200:20 /dev/sda',
+                'hdparm --make-bad-sector 123 /dev/sda',
+                'hdparm --write-sector 123 /dev/disk/by-id/ata-X'):
+        result = reg.get("exec").run(command=cmd)
+        assert isinstance(result, str), cmd
+        assert result.startswith("ERROR:") and "blocked" in result, cmd
+    from agentkai.tools import _is_dangerous
+    for cmd in ('mdadm --detail /dev/md0',
+                'mdadm --examine /dev/sda',
+                'mdadm --assemble /dev/md0 /dev/sda',
+                'mdadm --stop /dev/md0',
+                'mdadm --zero-superblock /tmp/disk.img',
+                'zpool destroy -n tank',
+                'zpool destroy -fn tank',
+                'zpool status',
+                'zpool list',
+                'zpool create -n tank /dev/sda',
+                'zfs destroy -n tank/data',
+                'zfs list',
+                'zfs snapshot tank/data@snap',
+                'zfs get all tank/data',
+                'hdparm -I /dev/sda',
+                'hdparm --read-sector 123 /dev/sda',
+                'hdparm --security-freeze /dev/sda',
+                'hdparm --security-set-pass pass /dev/sda',
+                'hdparm --write-sector 123 /tmp/disk.img',
+                'hdparm --trim-sector-ranges 100:10 /tmp/disk.img'):
+        assert _is_dangerous(cmd) is None, cmd
