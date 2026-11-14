@@ -1274,6 +1274,63 @@ def test_exec_blocklist_format_partition_volume_tools(reg):
         assert _is_dangerous(cmd) is None, cmd
 
 
+def test_exec_blocklist_gpt_curses_partition_editors(reg):
+    """GPT / curses partition editors aimed at a raw device.
+
+    ``gdisk`` (the GPT fdisk interactive editor — only ``-l`` lists
+    and exits), ``cgdisk`` (its curses sibling, with no read-only
+    mode at all), ``cfdisk`` (the curses editor, which defaults to
+    /dev/sda with no device given and whose --print was removed in
+    util-linux 2.25) and ``fixparts`` (the GPT fdisk MBR repair
+    tool, which takes no options at all) all open an editor on the
+    raw device and write the partition table on ``w`` — and all four
+    passed the blocklist unchecked (verified against
+    ``_is_dangerous`` before this fix), while ``fdisk`` / ``parted``
+    / ``sgdisk`` / ``sfdisk`` on the same device were already
+    blocked. Blocked cases go through exec (safe: exec blocks
+    them); allowed cases use the pure-function scan, since running
+    them would write the target. Precision is preserved: each tool
+    keeps its read-only form (``gdisk -l``, ``cfdisk -r`` /
+    ``--read-only``, ``cfdisk -V`` / ``-h``), and every one of them
+    stays allowed on a non-device target such as an image file in
+    /tmp.
+    """
+    for cmd in ('gdisk /dev/sda',
+                'gdisk /dev/nvme0n1',
+                'sudo gdisk /dev/sda',
+                '/usr/sbin/gdisk /dev/sda',
+                "bash -c 'gdisk /dev/sda'",
+                'gdisk /dev/disk/by-id/ata-X',
+                'gdisk /dev/../dev/sda',
+                'cgdisk /dev/sda',
+                'cgdisk -a /dev/sda',
+                'cgdisk /dev/nvme0n1',
+                'cfdisk /dev/sda',
+                'cfdisk',
+                'cfdisk -L never /dev/sda',
+                'cfdisk --color /dev/sda',
+                'cfdisk -b 512 /dev/sda',
+                'cfdisk -z /dev/sda',
+                'fixparts /dev/sda',
+                'fixparts /dev/nvme0n1'):
+        result = reg.get("exec").run(command=cmd)
+        assert isinstance(result, str), cmd
+        assert result.startswith("ERROR:") and "blocked" in result, cmd
+    from agentkai.tools import _is_dangerous
+    for cmd in ('gdisk -l /dev/sda',
+                'gdisk -l',
+                'gdisk /tmp/disk.img',
+                'cgdisk /tmp/disk.img',
+                'cfdisk -r /dev/sda',
+                'cfdisk --read-only /dev/sda',
+                'cfdisk -V',
+                'cfdisk -h',
+                'cfdisk -r /tmp/disk.img',
+                'cfdisk /tmp/disk.img',
+                'fixparts /tmp/disk.img'):
+        assert _is_dangerous(cmd) is None, cmd
+
+
 def test_exec_blocklist_disk_destroy_tools(reg):
     """Disk-destroying tools that format / partition nothing.
 

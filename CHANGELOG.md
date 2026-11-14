@@ -3,6 +3,26 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.30] - 2026-11-14
+
+### Fixed
+- **Exec blocklist: GPT / curses partition editors on raw devices
+  slipped past unchecked.** `gdisk` (the GPT fdisk interactive
+  editor), `cgdisk` (its curses sibling), `cfdisk` (the curses
+  editor) and `fixparts` (the GPT fdisk MBR repair tool) all open
+  an editor on the raw device and write the partition table on
+  `w` — but none of them matched the format / partition / volume
+  checks added in 0.6.27, which only knew `fdisk`, `parted`,
+  `sgdisk` and `sfdisk`. They are now blocked whenever their
+  target is a raw device (including `..` climbs and by-id
+  symlinks, via the existing device-spelling check). Precision is
+  preserved: each tool keeps its read-only form (`gdisk -l`,
+  `cfdisk -r` / `--read-only`, `cfdisk -V` / `-h`), a bare
+  `cfdisk` blocks too — with no device given it defaults to
+  /dev/sda — and all of them stay allowed on non-device targets
+  such as image files. New test pins the blocked spellings (18
+  cases) and the allowed ones (11 cases).
+
 ## [0.6.29] - 2026-11-13
 
 ### Fixed

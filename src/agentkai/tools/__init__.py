@@ -1432,6 +1432,18 @@ def _split_tool_args(args: list[str], value_shorts: frozenset | None = None,
 # ``--examine``, ``zpool status`` / ``list``, ``zfs list`` /
 # ``snapshot``, ``hdparm -I`` / ``--read-sector``) and the dry runs
 # (``zpool destroy -n``, ``zfs destroy -n``) stay allowed.
+# The same hole stayed open for the remaining partition-table
+# editors: ``gdisk`` (the GPT fdisk interactive editor — only
+# ``-l`` lists and exits), ``cgdisk`` (its curses sibling, no
+# read-only mode at all), ``cfdisk`` (the curses editor, which
+# defaults to /dev/sda with no device given and whose --print was
+# removed in util-linux 2.25) and ``fixparts`` (the GPT fdisk MBR
+# repair tool, which takes no options at all) — all four open an
+# editor on the raw device and write on `w`, and all four passed
+# unchecked (verified against ``_is_dangerous`` before this fix),
+# while their read-only forms (``gdisk -l``, ``cfdisk -r`` /
+# ``--read-only``, ``cfdisk -V`` / ``-h``) stay allowed, and all of
+# them stay allowed on non-device targets such as image files.
 def _format_device_reason(tokens: list[str]) -> str | None:
     for i, tok in enumerate(tokens):
         name = _basename(tok)
@@ -1562,6 +1574,57 @@ def _format_device_reason(tokens: list[str]) -> str | None:
                     "show-geometry", "json", "list-types", "disk-id"}:
                 continue
             return "partition table edit"
+        elif name == "gdisk":
+            # -l lists the partition table and exits: the man page's
+            # only command-line option, and the only read-only form.
+            # Anything else opens the interactive GPT editor, which
+            # writes the table on `w` (the `p` / `v` menu keys are
+            # interactive commands, not flags).
+            operands, shorts, _longs, _vals = _split_tool_args(args)
+            if "l" in shorts:
+                continue
+            if any(_is_raw_device_spelling(o) for o in operands):
+                return "partition table edit"
+        elif name == "cgdisk":
+            # The curses GPT editor: its only command-line option is
+            # -a (highlighting) — there is no list or read-only mode,
+            # so any invocation naming a raw device opens the editor
+            # on it (and converts an MBR table to GPT on write).
+            operands, _shorts, _longs, _vals = _split_tool_args(args)
+            if any(_is_raw_device_spelling(o) for o in operands):
+                return "partition table edit"
+        elif name == "cfdisk":
+            # The curses partition editor: -r/--read-only forces a
+            # read-only open; -V/--version and -h/--help only print
+            # and exit. Every other form opens the editor, which
+            # writes on Write — and with no device at all it defaults
+            # to /dev/sda, so a bare `cfdisk` blocks too. There is no
+            # print form to preserve: --print was removed in
+            # util-linux 2.25 (printing moved to partx / lsblk).
+            # Value options: -b/--sector-size takes a value;
+            # -L/--color and --lock take optional arguments, so they
+            # are NOT value-taking here — `-L /dev/sda` leaves the
+            # device an operand, and consuming it would be a false
+            # pass.
+            operands, shorts, longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset("b"),
+                value_longs=frozenset(("sector-size",)))
+            if shorts & {"r", "V", "h"} or longs & {
+                    "read-only", "version", "help"}:
+                continue
+            if not operands:
+                return "partition table edit"
+            if any(_is_raw_device_spelling(o) for o in operands):
+                return "partition table edit"
+        elif name == "fixparts":
+            # The GPT fdisk MBR repair tool: it takes no command-line
+            # options at all, just the device, and its interactive
+            # menu rewrites the partition table on `w` — it deletes
+            # stray GPT data, changes primary/logical assignment, and
+            # is liable to renumber partitions unasked.
+            operands, _shorts, _longs, _vals = _split_tool_args(args)
+            if any(_is_raw_device_spelling(o) for o in operands):
+                return "partition table edit"
         elif name == "cryptsetup":
             # Only the data-destroying subcommands: luksFormat wipes
             # the device, luksHeaderRestore overwrites the header,
@@ -1935,6 +1998,7 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     device, ``shred``/``wipefs``/``blkdiscard`` aimed at one, and
     format / partition / volume tools aimed at one (``mke2fs``,
     ``mkswap``, ``fdisk``, ``parted``, ``sgdisk``, ``sfdisk``,
+    ``gdisk`` / ``cgdisk`` / ``cfdisk`` / ``fixparts``,
     ``cryptsetup luksFormat`` / ``erase``, ``pvcreate``/``vgcreate``
     and kin, ``nvme format`` / ``sanitize``, ``hdparm
     --security-erase`` / sector writes, ``badblocks -w``,
