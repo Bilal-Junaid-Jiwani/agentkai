@@ -1444,6 +1444,20 @@ def _split_tool_args(args: list[str], value_shorts: frozenset | None = None,
 # while their read-only forms (``gdisk -l``, ``cfdisk -r`` /
 # ``--read-only``, ``cfdisk -V`` / ``-h``) stay allowed, and all of
 # them stay allowed on non-device targets such as image files.
+# The same hole stayed open for destroy spellings that never name a
+# device path, or never matched the tool the check knew: ``lvremove
+# vg0/lv0`` and ``vgremove vg0`` — the canonical LVM remove
+# spellings — name a plain volume / group, so the device-target
+# checks never saw them, and ``sg_format --format`` (SCSI FORMAT
+# UNIT, which destroys all data on the media) and ``sg_dd of=``
+# (dd under another name — the ``dd`` pattern needs a word boundary
+# the underscore defeats) were unknown tools entirely — all passed
+# unchecked (verified against ``_is_dangerous`` before this fix),
+# while the read-only forms (bare ``sg_format``, which only prints
+# the block size and count, ``sg_dd`` reading a device to a file,
+# ``lvremove`` / ``vgremove --test``) stay allowed, and ``sg_format
+# --format`` stays allowed on a non-device target such as an image
+# file in /tmp.
 def _format_device_reason(tokens: list[str]) -> str | None:
     for i, tok in enumerate(tokens):
         name = _basename(tok)
@@ -1674,11 +1688,11 @@ def _format_device_reason(tokens: list[str]) -> str | None:
                      "setphysicalvolumesize", "vgmetadatacopies")))
             if any(_is_raw_device_spelling(o) for o in operands):
                 return "LVM metadata write"
-        elif name in ("vgcreate", "vgremove", "vgextend", "vgreduce"):
+        elif name in ("vgcreate", "vgextend", "vgreduce"):
             # vgcreate claims the devices for a new volume group;
-            # vgextend adds one to an existing group; vgremove /
-            # vgreduce drop one. Value options: -s physical extent
-            # size, -l max logical volumes, -p max physical volumes,
+            # vgextend adds one to an existing group; vgreduce drops
+            # one. Value options: -s physical extent size, -l max
+            # logical volumes, -p max physical volumes,
             # --metadatatype, --vgmetadatacopies.
             operands, _shorts, _longs, _vals = _split_tool_args(
                 args, value_shorts=frozenset("slp"),
@@ -1688,22 +1702,44 @@ def _format_device_reason(tokens: list[str]) -> str | None:
                      "vgmetadatacopies")))
             if any(_is_raw_device_spelling(o) for o in operands):
                 return "LVM metadata write"
+        elif name == "vgremove":
+            # Removes a whole volume group: its operand is a plain VG
+            # name (``vgremove vg0``), not a device path — the shared
+            # vg* branch above only fired when a member device was
+            # named alongside it, so the canonical spelling passed
+            # unchecked (verified against ``_is_dangerous`` before
+            # this fix). The group IS the data, so any removal blocks,
+            # the same way ``zpool destroy`` blocks a pool by name.
+            # --test is the dry run (prints what would be done,
+            # writes nothing); --select names groups to remove
+            # without an operand, so it blocks too. Value options:
+            # -S/--select takes the selection expression.
+            operands, shorts, longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset("S"),
+                value_longs=frozenset(("select",)))
+            if "test" in longs or "t" in shorts:
+                continue
+            if "select" in longs or "S" in shorts or operands:
+                return "LVM metadata write"
         elif name == "lvremove":
-            # Removes a logical volume: its path is /dev/mapper/vg-lv
-            # (a raw-device spelling) or /dev/<vg>/<lv>. The two-level
-            # shape is shared with /dev/pts/* and /dev/shm/*, but those
-            # are never valid lvremove targets, so the over-block only
-            # ever hits a nonsense invocation.
-            operands, _shorts, _longs, _vals = _split_tool_args(args)
-            for target in operands:
-                if _is_raw_device_spelling(target):
-                    return "LVM metadata write"
-                segments = [s for s in _normalize_path_spelling(target)
-                            .split("/") if s != ""]
-                if len(segments) == 3 and segments[0] == "dev" \
-                        and segments[1] not in ("disk", "mapper") \
-                        and segments[2]:
-                    return "LVM metadata write"
+            # Removes a logical volume: its operand is usually a plain
+            # ``vg/lv`` name (``lvremove vg0/lv0``), not a /dev path —
+            # the old check only knew /dev/mapper/vg-lv and
+            # /dev/<vg>/<lv>, so the canonical spelling passed
+            # unchecked (verified against ``_is_dangerous`` before
+            # this fix). The volume IS the data, so any removal
+            # blocks, the same way ``zpool destroy`` blocks a pool by
+            # name. --test is the dry run (prints what would be done,
+            # writes nothing); --select names volumes to remove
+            # without an operand, so it blocks too. Value options:
+            # -S/--select takes the selection expression.
+            operands, shorts, longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset("S"),
+                value_longs=frozenset(("select",)))
+            if "test" in longs or "t" in shorts:
+                continue
+            if "select" in longs or "S" in shorts or operands:
+                return "LVM metadata write"
         elif name == "mdadm":
             # --create builds a new array (destroying the member
             # devices) and --zero-superblock wipes the RAID metadata
@@ -1835,6 +1871,54 @@ def _format_device_reason(tokens: list[str]) -> str | None:
                 continue
             if any(_is_raw_device_spelling(o) for o in operands):
                 return "destructive disk test"
+        elif name == "sg_format":
+            # Only --format (-F) destroys the disk: it issues a SCSI
+            # FORMAT UNIT command, which "will destroy all the data
+            # held on the media" (sg_format(8)). A bare
+            # ``sg_format /dev/sda`` only prints the block size and
+            # block count and "will not modify the disk", and --resize
+            # is documented as leaving every block's contents
+            # unchanged and reversible — so both stay allowed, as do
+            # the format parameters on their own (--size, --count,
+            # --ffmt, --security only parametrize a format, and
+            # --quick only skips the 15-second warning). --dry-run
+            # parses the command line and bypasses the actual FORMAT
+            # UNIT command, so it stays allowed even with --format.
+            # Value options per sg_format --help (-C cmplst, -c
+            # count, -t ffmt, -f fmtpinfo, -M mode, -P pfu, -q pie,
+            # -x poll, -s size, --tape, --timeout).
+            operands, shorts, longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset("CctfMPqxs"),
+                value_longs=frozenset(
+                    ("cmplst", "count", "ffmt", "fmtpinfo", "mode",
+                     "pfu", "pie", "poll", "size", "tape",
+                     "timeout")))
+            if "dry-run" in longs:
+                continue
+            if "F" not in shorts and "format" not in longs:
+                continue
+            if any(_is_raw_device_spelling(o) for o in operands):
+                return "SCSI disk format"
+        elif name in ("sg_dd", "sgm_dd", "sgp_dd"):
+            # sg_dd (and its threaded twins sgm_dd / sgp_dd) is dd
+            # under another name: ``sg_dd if=/dev/zero of=/dev/sda``
+            # writes the device exactly like ``dd of=/dev/sda`` — but
+            # the ``dd`` pattern needs a word boundary before ``dd``,
+            # and the underscore in ``sg_dd`` defeats it, so every
+            # such write passed unchecked (verified against
+            # ``_is_dangerous`` before this fix). Only the of= target
+            # counts: reading a device to a file
+            # (``sg_dd if=/dev/sda of=/tmp/x``) stays allowed, as
+            # does writing to a harmless target such as /dev/null.
+            # The args are key=value words, so the of= value is
+            # picked out of the operands rather than split as a
+            # flag; a value word such as ``bs=512`` never matches
+            # the device spelling.
+            operands, _shorts, _longs, _vals = _split_tool_args(args)
+            for target in operands:
+                if target.startswith("of=") and _is_raw_device_spelling(
+                        target[3:]):
+                    return "raw disk write"
     return None
 
 
@@ -2004,6 +2088,10 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     --security-erase`` / sector writes, ``badblocks -w``,
     ``mdadm --zero-superblock``, ``zpool destroy``, ``zfs destroy``
     / ``rollback`` — each keeping its read-only form) — including
+    ``lvremove`` / ``vgremove`` by plain name (``vg0/lv0``, ``vg0``)
+    and ``sg_format --format`` / ``sg_dd of=`` on one, each keeping
+    its read-only form (``lvremove`` / ``vgremove --test``, bare
+    ``sg_format``, ``sg_dd`` reading a device to a file) — including
     dot-segment /
     doubled-slash spellings of the device
     (``/dev/./sda``, ``//dev/sda``), ``>|`` redirects to one, quoted

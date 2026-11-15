@@ -1464,3 +1464,78 @@ def test_exec_blocklist_volume_destroy_tools(reg):
                 'hdparm --write-sector 123 /tmp/disk.img',
                 'hdparm --trim-sector-ranges 100:10 /tmp/disk.img'):
         assert _is_dangerous(cmd) is None, cmd
+
+
+def test_exec_blocklist_lvm_name_and_scsi_destroy_tools(reg):
+    """LVM remove by plain name, and SCSI destroy tools.
+
+    ``lvremove vg0/lv0`` and ``vgremove vg0`` — the canonical LVM
+    remove spellings — name a plain volume / group, not a device
+    path, so the device-target checks never saw them; ``sg_format
+    --format`` issues a SCSI FORMAT UNIT command that destroys all
+    data on the media, and ``sg_dd of=/dev/sda`` writes the device
+    exactly like ``dd of=/dev/sda`` — but the ``dd`` pattern needs a
+    word boundary before ``dd`` that the underscore in ``sg_dd``
+    defeats, so both passed the blocklist unchecked (verified
+    against ``_is_dangerous`` before this fix). Blocked cases go
+    through exec (safe: exec blocks them); allowed cases use the
+    pure-function scan, since running them would write the target.
+    Precision is preserved: each tool keeps its read-only form
+    (bare ``sg_format`` only prints the block size and count,
+    ``sg_dd`` reading a device to a file, ``lvremove`` /
+    ``vgremove --test``), ``sg_format --resize`` stays allowed —
+    the man page documents it as leaving every block's contents
+    unchanged and reversible — and ``sg_format --format`` stays
+    allowed on a non-device target such as an image file in /tmp.
+    """
+    for cmd in ('lvremove vg0/lv0',
+                'lvremove -f vg0/lv0',
+                'lvremove --yes vg0/lv0',
+                'lvremove vg0/lv0 vg0/lv1',
+                'lvremove --select lv_name=lv0',
+                'lvremove /dev/vg0/lv0',
+                'sudo lvremove vg0/lv0',
+                "bash -c 'lvremove vg0/lv0'",
+                'vgremove vg0',
+                'vgremove -f vg0',
+                'vgremove --force vg0',
+                'vgremove --select vg_name=vg0',
+                "bash -c 'vgremove vg0'",
+                'sg_format --format /dev/sda',
+                'sg_format -F /dev/sda',
+                'sg_format --format --ffmt=1 --size=4096 /dev/sda',
+                'sg_format --format /dev/disk/by-id/ata-X',
+                'sg_format -F /dev/../dev/sda',
+                'sudo sg_format --format /dev/sda',
+                "bash -c 'sg_format --format /dev/sda'",
+                'sg_dd if=/dev/zero of=/dev/sda',
+                'sg_dd of=/dev/sda if=/dev/zero bs=512',
+                'sg_dd if=/dev/zero of=/dev/sdb',
+                'sgm_dd if=/dev/zero of=/dev/sda',
+                'sgp_dd if=/dev/zero of=/dev/sda',
+                "bash -c 'sg_dd if=/dev/zero of=/dev/sda'"):
+        result = reg.get("exec").run(command=cmd)
+        assert isinstance(result, str), cmd
+        assert result.startswith("ERROR:") and "blocked" in result, cmd
+    from agentkai.tools import _is_dangerous
+    for cmd in ('lvremove',
+                'lvremove --test vg0/lv0',
+                'lvremove -t vg0/lv0',
+                'vgremove',
+                'vgremove --test vg0',
+                'lvs',
+                'vgs',
+                'lvdisplay',
+                'vgdisplay',
+                'sg_format /dev/sda',
+                'sg_format --size=4096 /dev/sda',
+                'sg_format --resize --count=100 /dev/sda',
+                'sg_format --dry-run --format /dev/sda',
+                'sg_format --format /tmp/disk.img',
+                'sg_dd if=/dev/sda of=/tmp/x',
+                'sg_dd if=/dev/zero of=/tmp/x',
+                'sg_dd if=/dev/sda of=/dev/null',
+                'sg_inq /dev/sda',
+                'sg_read if=/dev/sda of=/tmp/x',
+                'sg_scan'):
+        assert _is_dangerous(cmd) is None, cmd

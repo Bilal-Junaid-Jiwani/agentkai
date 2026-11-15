@@ -3,6 +3,35 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.31] - 2026-11-15
+
+### Fixed
+- **Exec blocklist: destroy spellings that never name a device path,
+  or never matched the tool the check knew, slipped past
+  unchecked.** `lvremove vg0/lv0` and `vgremove vg0` — the
+  canonical LVM remove spellings — name a plain volume / group,
+  not a device path, so the device-target checks never saw them,
+  even though the /dev-prefixed spellings (`/dev/vg0/lv0`,
+  `/dev/mapper/vg0-lv0`) were already blocked. The volume / group
+  IS the data, so any removal now blocks, the same way `zpool
+  destroy` already blocks a pool by name — including the
+  `--select` form, which names volumes to remove without an
+  operand. `sg_format --format` (sg3_utils) issues a SCSI FORMAT
+  UNIT command, which destroys all data on the media, and `sg_dd
+  if=/dev/zero of=/dev/sda` (with its threaded twins `sgm_dd` /
+  `sgp_dd`) writes the device exactly like `dd of=/dev/sda` — but
+  the `dd` pattern needs a word boundary the underscore in
+  `sg_dd` defeats, so both were unknown tools entirely. Precision
+  is preserved: each tool keeps its read-only form (bare
+  `sg_format` only prints the block size and count, `sg_dd`
+  reading a device to a file, `lvremove` / `vgremove --test`),
+  `sg_format --resize` stays allowed — the man page documents it
+  as leaving every block's contents unchanged and reversible —
+  as does `sg_format --dry-run --format`, and `sg_format
+  --format` stays allowed on non-device targets such as image
+  files. New test pins the blocked spellings (26 cases) and the
+  allowed ones (20 cases).
+
 ## [0.6.30] - 2026-11-14
 
 ### Fixed
