@@ -1458,6 +1458,25 @@ def _split_tool_args(args: list[str], value_shorts: frozenset | None = None,
 # ``lvremove`` / ``vgremove --test``) stay allowed, and ``sg_format
 # --format`` stays allowed on a non-device target such as an image
 # file in /tmp.
+# The same hole stayed open for the shrink spellings and the other
+# ``dd`` twins: ``lvreduce`` exists only to shrink a logical volume
+# — every block past the new end is discarded — and ``lvresize``
+# with an absolute ``-L`` / ``-l`` size (or a ``-`` relative one)
+# shrinks it the same way, but neither matched any check, since
+# the volume is named by plain ``vg/lv`` and no device path ever
+# appears; ``dcfldd`` / ``dc3dd`` (forensic ``dd`` forks) take the
+# same ``if=`` / ``of=`` keywords, so ``of=/dev/sda`` writes the
+# device exactly like ``dd of=/dev/sda`` — but the ``dd`` pattern
+# needs a word boundary the ``dd`` in ``dcfldd`` / ``dc3dd``
+# defeats; and ``ddrescue`` copies its infile to a plain
+# positional outfile, so ``ddrescue /dev/sda /dev/sdb`` overwrites
+# the device exactly like ``dd`` — but no ``dd`` / copy / wipe
+# pattern ever saw the outfile (verified against ``_is_dangerous``
+# before this fix). Precision is preserved: ``lvresize`` keeps its
+# grow forms (``-L +1G``, ``-l +100``, ``--size +100%FREE``) and
+# both LVM tools keep their ``--test`` dry run, ``dcfldd`` /
+# ``dc3dd`` keep reading a device to a file, and ``ddrescue`` keeps
+# writing its image to a regular file.
 def _format_device_reason(tokens: list[str]) -> str | None:
     for i, tok in enumerate(tokens):
         name = _basename(tok)
@@ -1740,6 +1759,50 @@ def _format_device_reason(tokens: list[str]) -> str | None:
                 continue
             if "select" in longs or "S" in shorts or operands:
                 return "LVM metadata write"
+        elif name == "lvreduce":
+            # lvreduce exists only to shrink a logical volume: every
+            # block past the new end is discarded, so any invocation
+            # naming a volume blocks — the same way lvremove blocks
+            # a volume by name, and for the same reason: the volume
+            # IS the data, and no device path ever appears (verified
+            # against ``_is_dangerous`` before this fix). There is
+            # no grow form to preserve: -L +1G is an error in
+            # lvreduce. --test is the dry run; --select names
+            # volumes to shrink without an operand. Value options:
+            # -L/--size, -l/--extents, -S/--select.
+            operands, shorts, longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset("LlS"),
+                value_longs=frozenset(
+                    ("size", "extents", "select")))
+            if "test" in longs or "t" in shorts:
+                continue
+            if "select" in longs or "S" in shorts or operands:
+                return "LVM volume shrink"
+        elif name == "lvresize":
+            # lvresize sets a new size: -L/--size (e.g. 1G) or
+            # -l/--extents (e.g. 100). A leading + grows the volume
+            # and destroys nothing; an absolute size or a leading -
+            # shrinks it, discarding every block past the new end —
+            # the same data loss as lvreduce. Only the shrink
+            # spellings block, so the grow forms (-L +1G, -l +100,
+            # --size +100%FREE) stay allowed, as does the --test dry
+            # run. With no size given the command errors in real
+            # LVM, so it stays allowed, the same way a bare
+            # lvremove does. Value options: -L/--size, -l/--extents,
+            # -S/--select.
+            operands, shorts, longs, values = _split_tool_args(
+                args, value_shorts=frozenset("LlS"),
+                value_longs=frozenset(
+                    ("size", "extents", "select")))
+            if "test" in longs or "t" in shorts:
+                continue
+            if not operands and "select" not in longs \
+                    and "S" not in shorts:
+                continue
+            for flag, val in values:
+                if flag in ("L", "l", "size", "extents") \
+                        and not val.startswith("+"):
+                    return "LVM volume shrink"
         elif name == "mdadm":
             # --create builds a new array (destroying the member
             # devices) and --zero-superblock wipes the RAID metadata
@@ -1899,14 +1962,20 @@ def _format_device_reason(tokens: list[str]) -> str | None:
                 continue
             if any(_is_raw_device_spelling(o) for o in operands):
                 return "SCSI disk format"
-        elif name in ("sg_dd", "sgm_dd", "sgp_dd"):
+        elif name in ("sg_dd", "sgm_dd", "sgp_dd", "dcfldd", "dc3dd"):
             # sg_dd (and its threaded twins sgm_dd / sgp_dd) is dd
             # under another name: ``sg_dd if=/dev/zero of=/dev/sda``
             # writes the device exactly like ``dd of=/dev/sda`` — but
             # the ``dd`` pattern needs a word boundary before ``dd``,
             # and the underscore in ``sg_dd`` defeats it, so every
             # such write passed unchecked (verified against
-            # ``_is_dangerous`` before this fix). Only the of= target
+            # ``_is_dangerous`` before this fix). dcfldd (the
+            # forensic dd with hashing) and dc3dd (its DoD fork) are
+            # the same spelling under another name again: they take
+            # the same ``if=`` / ``of=`` keywords, so ``dcfldd
+            # if=/dev/zero of=/dev/sda`` writes the device exactly
+            # like ``dd`` — but the ``dd`` in ``dcfldd`` / ``dc3dd``
+            # defeats the same word boundary. Only the of= target
             # counts: reading a device to a file
             # (``sg_dd if=/dev/sda of=/tmp/x``) stays allowed, as
             # does writing to a harmless target such as /dev/null.
@@ -1919,6 +1988,34 @@ def _format_device_reason(tokens: list[str]) -> str | None:
                 if target.startswith("of=") and _is_raw_device_spelling(
                         target[3:]):
                     return "raw disk write"
+        elif name == "ddrescue":
+            # ddrescue copies its infile to a plain positional
+            # outfile: ``ddrescue /dev/sda /dev/sdb`` overwrites the
+            # device exactly like ``dd of=/dev/sdb`` — but the
+            # outfile is a positional operand, so no ``dd`` / copy /
+            # wipe pattern ever saw it (verified against
+            # ``_is_dangerous`` before this fix). Only the outfile
+            # (the second operand) counts: the infile may be a
+            # device — reading it is the point — and an outfile
+            # that is a regular file stays allowed, as does a
+            # mapfile that names a device (it only records block
+            # status). Value options per the GNU ddrescue manual
+            # (-a min read rate, -b sector size, -c cluster size,
+            # -e max bad areas, -E max error rate, -i input
+            # position, -K skip size, -m domain mapfile, -o output
+            # position, -r retry passes, -s size, -T timeout, -X
+            # max read errors).
+            operands, _shorts, _longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset("abceEiKmorsTX"),
+                value_longs=frozenset(
+                    ("min-read-rate", "sector-size", "cluster-size",
+                     "max-bad-areas", "max-errors", "max-error-rate",
+                     "input-position", "skip-size", "domain-mapfile",
+                     "output-position", "retry-passes", "size",
+                     "timeout", "max-read-errors")))
+            if len(operands) >= 2 and _is_raw_device_spelling(
+                    operands[1]):
+                return "raw disk write"
     return None
 
 
@@ -2092,6 +2189,12 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     and ``sg_format --format`` / ``sg_dd of=`` on one, each keeping
     its read-only form (``lvremove`` / ``vgremove --test``, bare
     ``sg_format``, ``sg_dd`` reading a device to a file) — including
+    ``lvreduce`` and shrink forms of ``lvresize`` (``-L`` / ``-l``
+    without a leading ``+``), ``dcfldd`` / ``dc3dd`` ``of=`` on one,
+    and ``ddrescue`` with a raw-device outfile, each keeping its
+    grow / read-only form (``lvresize -L +1G``, ``lvreduce`` /
+    ``lvresize --test``, ``dcfldd`` reading a device to a file,
+    ``ddrescue`` to a regular file) — including
     dot-segment /
     doubled-slash spellings of the device
     (``/dev/./sda``, ``//dev/sda``), ``>|`` redirects to one, quoted

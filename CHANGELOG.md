@@ -3,6 +3,29 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.32] - 2026-11-16
+
+### Fixed
+- **Exec blocklist: LVM shrink spellings and the other `dd` twins
+  slipped past unchecked.** `lvreduce` exists only to shrink a
+  logical volume — every block past the new end is discarded — and
+  `lvresize` with an absolute `-L` / `-l` size (or a `-` relative
+  one) shrinks it the same way, but neither matched any check,
+  since the volume is named by plain `vg/lv` and no device path
+  ever appears. `dcfldd` / `dc3dd` (forensic `dd` forks) take the
+  same `if=` / `of=` keywords, so `dcfldd if=/dev/zero of=/dev/sda`
+  writes the device exactly like `dd of=/dev/sda` — but the `dd`
+  pattern needs a word boundary the `dd` in `dcfldd` / `dc3dd`
+  defeats. And `ddrescue` copies its infile to a plain positional
+  outfile, so `ddrescue /dev/sda /dev/sdb` overwrites the device
+  exactly like `dd` — but no `dd` / copy / wipe pattern ever saw
+  the outfile. Precision is preserved: `lvresize` keeps its grow
+  forms (`-L +1G`, `-l +100`, `--size +100%FREE`) and both LVM
+  tools keep their `--test` dry run, `dcfldd` / `dc3dd` keep
+  reading a device to a file, and `ddrescue` keeps writing its
+  image to a regular file. New test pins the blocked spellings
+  (31 cases) and the allowed ones (21 cases).
+
 ## [0.6.31] - 2026-11-15
 
 ### Fixed

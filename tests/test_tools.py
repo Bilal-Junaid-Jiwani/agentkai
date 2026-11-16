@@ -1539,3 +1539,87 @@ def test_exec_blocklist_lvm_name_and_scsi_destroy_tools(reg):
                 'sg_read if=/dev/sda of=/tmp/x',
                 'sg_scan'):
         assert _is_dangerous(cmd) is None, cmd
+
+
+def test_exec_blocklist_lvm_shrink_and_dd_twins_tools(reg):
+    """LVM shrink tools, and the other dd twins.
+
+    ``lvreduce`` exists only to shrink a logical volume — every
+    block past the new end is discarded — and ``lvresize`` with an
+    absolute ``-L`` / ``-l`` size (or a ``-`` relative one) shrinks
+    it the same way, but neither matched any check, since the
+    volume is named by plain ``vg/lv`` and no device path ever
+    appears; ``dcfldd`` / ``dc3dd`` take the same ``if=`` / ``of=``
+    keywords as ``dd``, so ``of=/dev/sda`` writes the device
+    exactly like ``dd of=/dev/sda`` — but the ``dd`` pattern needs
+    a word boundary the ``dd`` in ``dcfldd`` / ``dc3dd`` defeats;
+    and ``ddrescue`` copies its infile to a plain positional
+    outfile, so ``ddrescue /dev/sda /dev/sdb`` overwrites the
+    device exactly like ``dd`` — but no ``dd`` / copy / wipe
+    pattern ever saw the outfile (verified against
+    ``_is_dangerous`` before this fix). Blocked cases go through
+    exec (safe: exec blocks them); allowed cases use the
+    pure-function scan, since running them would write the target.
+    Precision is preserved: ``lvresize`` keeps its grow forms
+    (``-L +1G``, ``-l +100``, ``--size +100%FREE``) and both LVM
+    tools keep their ``--test`` dry run, ``dcfldd`` / ``dc3dd``
+    keep reading a device to a file, and ``ddrescue`` keeps
+    writing its image to a regular file.
+    """
+    for cmd in ('lvreduce -L 1G vg0/lv0',
+                'lvreduce -f vg0/lv0',
+                'lvreduce --force --size 500M vg0/lv0',
+                'lvreduce -l 100 /dev/vg0/lv0',
+                'lvreduce --select lv_name=lv0 -L 1G',
+                'sudo lvreduce -L 1G vg0/lv0',
+                "bash -c 'lvreduce -L 1G vg0/lv0'",
+                'lvresize -L 1G vg0/lv0',
+                'lvresize --size 1G vg0/lv0',
+                'lvresize -L -1G vg0/lv0',
+                'lvresize --size=-1G vg0/lv0',
+                'lvresize -l 100 vg0/lv0',
+                'lvresize --extents 100 vg0/lv0',
+                'lvresize -L 50%VG vg0/lv0',
+                'lvresize -L 1G /dev/vg0/lv0',
+                'lvresize --select lv_name=lv0 -L 1G',
+                'sudo lvresize -L 1G vg0/lv0',
+                "bash -c 'lvresize -L 1G vg0/lv0'",
+                'dcfldd if=/dev/zero of=/dev/sda',
+                'dcfldd of=/dev/sda if=/dev/zero bs=512',
+                'dcfldd if=/dev/zero of=/dev/sdb',
+                'dc3dd if=/dev/zero of=/dev/sda',
+                'dc3dd if=/dev/zero of=/dev/sdb hash=md5',
+                "bash -c 'dcfldd if=/dev/zero of=/dev/sda'",
+                'ddrescue /dev/zero /dev/sda',
+                'ddrescue -f /dev/sda /dev/sdb',
+                'ddrescue --force /dev/sda /dev/sdb',
+                'ddrescue /dev/sda /dev/sdb mapfile',
+                'ddrescue -o 512 /dev/sda /dev/sdb',
+                'ddrescue --output-position=512 /dev/sda /dev/sdb',
+                "bash -c 'ddrescue /dev/sda /dev/sdb'"):
+        result = reg.get("exec").run(command=cmd)
+        assert isinstance(result, str), cmd
+        assert result.startswith("ERROR:") and "blocked" in result, cmd
+    from agentkai.tools import _is_dangerous
+    for cmd in ('lvreduce',
+                'lvreduce --test -L 1G vg0/lv0',
+                'lvreduce -t vg0/lv0',
+                'lvresize',
+                'lvresize -L +1G vg0/lv0',
+                'lvresize --size +1G vg0/lv0',
+                'lvresize -l +100 vg0/lv0',
+                'lvresize --size +100%FREE vg0/lv0',
+                'lvresize -L +1G /dev/vg0/lv0',
+                'lvresize --test -L 1G vg0/lv0',
+                'lvextend -L +1G vg0/lv0',
+                'lvs',
+                'lvdisplay',
+                'dcfldd if=/dev/sda of=/tmp/x',
+                'dcfldd if=/dev/sda of=/dev/null',
+                'dc3dd if=/dev/sda of=/tmp/x',
+                'ddrescue /dev/sda /tmp/img',
+                'ddrescue /dev/sda /tmp/img mapfile',
+                'ddrescue -o 512 /dev/sda /tmp/img',
+                'ddrescue --input-position=512 /dev/sda /tmp/img',
+                'ddrescue -T 60 /dev/sda /tmp/img'):
+        assert _is_dangerous(cmd) is None, cmd
