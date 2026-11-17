@@ -1623,3 +1623,87 @@ def test_exec_blocklist_lvm_shrink_and_dd_twins_tools(reg):
                 'ddrescue --input-position=512 /dev/sda /tmp/img',
                 'ddrescue -T 60 /dev/sda /tmp/img'):
         assert _is_dangerous(cmd) is None, cmd
+
+
+def test_exec_blocklist_download_copy_output_targets(reg):
+    """Download / copy tools writing their output to a raw device.
+
+    ``curl -o`` / ``--output`` and ``wget -O`` /
+    ``--output-document`` name the file the download lands in, so
+    ``curl -o /dev/sda <url>`` writes the download straight onto
+    the disk exactly like ``cp`` to it — but neither matched any
+    pattern or token check, since the scan only knew the plain copy
+    spellings; the same hole stayed open for ``rsync`` / ``scp``,
+    whose destination is a plain positional operand exactly like
+    ``cp``'s — ``rsync /dev/zero /dev/sda`` and ``scp /tmp/img
+    /dev/sda`` overwrite the disk the same way (verified against
+    ``_is_dangerous`` before this fix). Blocked cases go through
+    exec (safe: exec blocks them); allowed cases use the
+    pure-function scan, since running them would write the target.
+    Precision is preserved: a device as a source (``rsync /dev/sda
+    /tmp/backup``) stays allowed — reading it is the point — as do
+    remote destinations (``scp /tmp/img host:/dev/sda`` names a
+    path on the host), the plain forms (``curl <url>`` writes to
+    stdout), ``curl -O`` (names the file after the URL in the
+    working directory), and a device spelling as another option's
+    value (``curl -d /dev/sda`` sends it as POST data).
+    """
+    for cmd in ('curl -o /dev/sda http://example.com/disk.img',
+                'curl --output /dev/sda http://example.com/disk.img',
+                'curl --output=/dev/sda http://example.com/disk.img',
+                'curl -s -o /dev/sda http://example.com/disk.img',
+                'curl -so /dev/sda http://example.com/disk.img',
+                'curl -o/dev/sda http://example.com/disk.img',
+                'curl -o /dev/sda1 http://example.com/disk.img',
+                'curl -o /dev/nvme0n1 http://example.com/disk.img',
+                'curl -o /dev/mapper/crypt http://example.com/disk.img',
+                'curl -D /dev/sda http://example.com/x',
+                'curl --dump-header=/dev/sdb http://example.com/x',
+                'sudo curl -o /dev/sda http://example.com/disk.img',
+                "bash -c 'curl -o /dev/sda http://example.com/x'",
+                'wget -O /dev/sda http://example.com/disk.img',
+                'wget --output-document /dev/sda http://example.com/x',
+                'wget --output-document=/dev/sda http://example.com/x',
+                'wget -O/dev/sda http://example.com/x',
+                'wget -o /dev/sda http://example.com/x',
+                'wget --output-file /dev/sdb http://example.com/x',
+                'wget -a /dev/sda http://example.com/x',
+                'wget --append-output=/dev/sda http://example.com/x',
+                'rsync /dev/zero /dev/sda',
+                'rsync -a /tmp/img /dev/sda',
+                'rsync -av /tmp/a/ /dev/sdb',
+                'rsync -e ssh /tmp/a /dev/sda',
+                'rsync --log-file=/dev/sda /tmp/a /tmp/b',
+                "bash -c 'rsync /tmp/a /dev/sda'",
+                'scp /tmp/img /dev/sda',
+                'scp -r /tmp/dir /dev/sda',
+                'scp user@host:/tmp/img /dev/sda',
+                'scp -i /tmp/key /tmp/img /dev/sda',
+                'scp -P 2222 /tmp/img /dev/sdb'):
+        result = reg.get("exec").run(command=cmd)
+        assert isinstance(result, str), cmd
+        assert result.startswith("ERROR:") and "blocked" in result, cmd
+    from agentkai.tools import _is_dangerous
+    for cmd in ('curl http://example.com/disk.img',
+                'curl -o /tmp/disk.img http://example.com/x',
+                'curl --output /tmp/x http://example.com/x',
+                'curl -O http://example.com/disk.img',
+                'curl -o /dev/null http://example.com/x',
+                'curl -D /tmp/headers http://example.com/x',
+                'curl -D - http://example.com/x',
+                'curl -o- http://example.com/x',
+                'curl -d /dev/sda http://example.com/x',
+                'curl -H "Host: example.com" -o /tmp/x http://example.com/x',
+                'wget -O /tmp/x http://example.com/x',
+                'wget -O- http://example.com/x',
+                'wget -o /tmp/wget.log http://example.com/x',
+                'wget http://example.com/x',
+                'rsync /dev/sda /tmp/backup.img',
+                'rsync -a /tmp/a /tmp/b',
+                'rsync /tmp/a user@host:/dev/sda',
+                'rsync --log-file=/tmp/rsync.log /tmp/a /tmp/b',
+                'scp /dev/sda /tmp/backup.img',
+                'scp /tmp/img user@host:/tmp/img',
+                'scp /tmp/img user@host:/dev/sda',
+                'scp -P 2222 /tmp/img /tmp/other'):
+        assert _is_dangerous(cmd) is None, cmd

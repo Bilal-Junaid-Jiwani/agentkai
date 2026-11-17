@@ -1255,12 +1255,106 @@ def _raw_device_reason(tokens: list[str]) -> str | None:
     against ``_is_dangerous`` before this fix). Destination rules match
     ``cp``: last operand, or ``-t``/``--target-directory`` when given
     (attached and clustered spellings included).
+
+    The same write spelled through a download or copy tool: ``curl
+    -o`` / ``--output`` and ``wget -O`` / ``--output-document`` name
+    the file the download lands in, so ``curl -o /dev/sda <url>``
+    writes the download straight onto the disk exactly like ``cp``
+    to it — but neither matched any pattern or token check, since
+    the scan only knew the plain copy spellings (verified against
+    ``_is_dangerous`` before this fix); the same hole stayed open
+    for ``rsync`` / ``scp``, whose destination is a plain positional
+    operand exactly like ``cp``'s — ``rsync /dev/zero /dev/sda``
+    and ``scp /tmp/img /dev/sda`` overwrite the disk the same way.
+    Only the output target counts: a device as a source (``rsync
+    /dev/sda /tmp/backup``, ``scp /dev/sda host:/tmp/x``) stays
+    allowed — reading it is the point — as do remote destinations
+    (``scp /tmp/img host:/dev/sda`` names a path on the host, not
+    the local disk) and the plain forms (``curl <url>`` writes to
+    stdout, ``wget -O-`` the same). ``wget``'s log outputs (``-o`` /
+    ``--output-file``, ``-a`` / ``--append-output``) and ``curl``'s
+    header dump (``-D`` / ``--dump-header``) are file outputs too,
+    so a device there blocks as well; ``curl -O`` only names the
+    file after the URL inside the working directory, so it stays
+    allowed.
     """
     for i, tok in enumerate(tokens):
         name = _basename(tok)
-        if name not in ("cp", "mv", "tee", "install"):
+        if name not in ("cp", "mv", "tee", "install",
+                        "curl", "wget", "rsync", "scp"):
             continue
         args = _args_until_separator(tokens, i + 1)
+        if name == "curl":
+            # Only the file-output values count: -o/--output is the
+            # download's file, -D/--dump-header writes the response
+            # headers to a file. The other value-taking shorts are
+            # declared too (-d data, -H header, -u user, -A agent,
+            # -e referer, -T upload file, -F form, -K config,
+            # -w write-out, -m max time, -y/-Y speed limits, -E
+            # cert, -c cookie jar, -b cookie, -x proxy, -U proxy
+            # user, -r range), so their values are consumed as
+            # values and never mistaken for an output file — a
+            # device spelling as POST data (``-d /dev/sda``) is
+            # just a string sent to the server, not a write.
+            _operands, _shorts, _longs, values = _split_tool_args(
+                args,
+                value_shorts=frozenset("oDdHuAeTFKwmyYEcbxUr"),
+                value_longs=frozenset(("output", "dump-header")))
+            for flag, val in values:
+                if flag in ("o", "output", "D", "dump-header") \
+                        and val and _is_raw_device_spelling(val):
+                    return "raw disk write"
+            continue
+        if name == "wget":
+            # -O/--output-document is the download's file; -o/
+            # --output-file writes the log to a file and -a/
+            # --append-output appends the log to one — all three
+            # are file outputs, so a device in any of them blocks.
+            # -O- / -o- mean stdout, so "-" never matches.
+            _operands, _shorts, _longs, values = _split_tool_args(
+                args, value_shorts=frozenset("Ooa"),
+                value_longs=frozenset(
+                    ("output-document", "output-file",
+                     "append-output")))
+            for flag, val in values:
+                if flag in ("O", "output-document", "o", "output-file",
+                            "a", "append-output") \
+                        and val and _is_raw_device_spelling(val):
+                    return "raw disk write"
+            continue
+        if name == "rsync":
+            # Destination is the last operand, exactly like cp.
+            # Value options per the rsync man page (-e rsh, and the
+            # value-taking longs), so their values are never
+            # mistaken for the destination. --log-file is a file
+            # output too, so a device there blocks as well.
+            operands, _shorts, _longs, values = _split_tool_args(
+                args, value_shorts=frozenset("e"),
+                value_longs=frozenset(
+                    ("rsh", "rsync-path", "log-file", "log-file-format",
+                     "password-file", "backup-dir", "suffix",
+                     "partial-dir", "temp-dir", "address", "port",
+                     "timeout", "bwlimit", "max-size", "min-size",
+                     "outformat")))
+            candidates = ([operands[-1]] if operands else [])
+            candidates += [v for flag, v in values
+                           if flag == "log-file"]
+            for dest in candidates:
+                if dest and _is_raw_device_spelling(dest):
+                    return "raw disk write"
+            continue
+        if name == "scp":
+            # Destination is the last operand, exactly like cp.
+            # Value options per the scp man page (-P port, -c
+            # cipher, -F config, -i identity, -l limit, -o ssh
+            # option, -S program), so their values are never
+            # mistaken for the destination.
+            operands, _shorts, _longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset("PcFiloS"),
+                value_longs=frozenset())
+            if operands and _is_raw_device_spelling(operands[-1]):
+                return "raw disk write"
+            continue
         operands: list[str] = []
         target_dir: str | None = None
         j = 0
@@ -2176,7 +2270,8 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     and option-preceded (``bash --norc -c '...'``) ``-c`` spellings —
     and catches ``find / -delete``, download-piped-to-shell one-liners,
     ``cp``/``mv``/``tee``/``install`` writes to a raw disk or memory
-    device, ``shred``/``wipefs``/``blkdiscard`` aimed at one, and
+    device (and ``curl``/``wget``/``rsync``/``scp`` output targets),
+    ``shred``/``wipefs``/``blkdiscard`` aimed at one, and
     format / partition / volume tools aimed at one (``mke2fs``,
     ``mkswap``, ``fdisk``, ``parted``, ``sgdisk``, ``sfdisk``,
     ``gdisk`` / ``cgdisk`` / ``cfdisk`` / ``fixparts``,

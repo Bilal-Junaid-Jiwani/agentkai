@@ -3,6 +3,33 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.33] - 2026-11-17
+
+### Fixed
+- **Exec blocklist: download and copy tools writing their output
+  straight onto a raw disk slipped past unchecked.** `curl -o` /
+  `--output` and `wget -O` / `--output-document` name the file
+  the download lands in, so `curl -o /dev/sda <url>` writes the
+  download onto the disk exactly like `cp` to it — but neither
+  matched any pattern or token check, since the scan only knew
+  the plain copy spellings. The same hole stayed open for
+  `rsync` / `scp`, whose destination is a plain positional
+  operand exactly like `cp`'s, so `rsync /dev/zero /dev/sda`
+  and `scp /tmp/img /dev/sda` overwrote the disk the same way.
+  Precision is preserved: a device as a source (`rsync /dev/sda
+  /tmp/backup`, `scp /dev/sda host:/tmp/x`) stays allowed —
+  reading it is the point — as do remote destinations (`scp
+  /tmp/img host:/dev/sda` names a path on the host, not the
+  local disk), the plain forms (`curl <url>` writes to stdout,
+  `wget -O-` the same), `curl -O` (names the file after the
+  URL in the working directory), and a device spelling as
+  another option's value (`curl -d /dev/sda` sends it as POST
+  data). `wget`'s log outputs (`-o` / `--output-file`, `-a` /
+  `--append-output`), `curl`'s header dump (`-D` /
+  `--dump-header`), and `rsync`'s `--log-file` are file outputs
+  too, so a device there blocks as well. New test pins the
+  blocked spellings (32 cases) and the allowed ones (22 cases).
+
 ## [0.6.32] - 2026-11-16
 
 ### Fixed
