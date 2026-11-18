@@ -1571,6 +1571,31 @@ def _split_tool_args(args: list[str], value_shorts: frozenset | None = None,
 # both LVM tools keep their ``--test`` dry run, ``dcfldd`` /
 # ``dc3dd`` keep reading a device to a file, and ``ddrescue`` keeps
 # writing its image to a regular file.
+# The same hole stayed open for the remaining sg3_utils write tools
+# and the other rescue twin: ``sg_write_same`` writes one block NUM
+# times from LBA — ``--num=0`` writes to the end of the device, so
+# one invocation can clear the whole disk (its own man page warns
+# exactly that); ``sg_unmap`` discards the named blocks, the SCSI
+# equivalent of the already-blocked ``blkdiscard``, and ``--all``
+# unmaps to the end of the device; ``sg_write_buffer`` sends data to
+# the device, and modes 4-7 download microcode, i.e. flash the
+# device firmware; ``sg_write_long`` overwrites one block (plus ECC)
+# at LBA, LBA 0 by default — all four passed unchecked (verified
+# against ``_is_dangerous`` before this fix), while their dry runs
+# (``sg_unmap`` / ``sg_write_buffer`` ``-d`` / ``--dry-run``) stay
+# allowed, ``sg_write_same`` keeps its safety interlock (a bare
+# invocation errors out, so it stays allowed without one of
+# ``--in`` / ``--lba`` / ``--num``), and all of them stay allowed on
+# non-device targets such as image files. ``dd_rescue`` (Kurt
+# Garloff's, with the underscore) copies its infile to a plain
+# positional outfile exactly like the ``ddrescue`` covered above,
+# and in shred mode (``-2`` / ``-3`` / ``-4`` / ``-z`` / ``-Z``)
+# writes random data to its single outfile operand — but its name
+# matched neither the ``dd`` word boundary nor the ``ddrescue``
+# check, so both spellings passed unchecked (verified against
+# ``_is_dangerous`` before this fix), while reading a device to a
+# regular file stays allowed, as do its log / bad-blocks outputs on
+# regular files.
 def _format_device_reason(tokens: list[str]) -> str | None:
     for i, tok in enumerate(tokens):
         name = _basename(tok)
@@ -2110,6 +2135,137 @@ def _format_device_reason(tokens: list[str]) -> str | None:
             if len(operands) >= 2 and _is_raw_device_spelling(
                     operands[1]):
                 return "raw disk write"
+        elif name == "sg_write_same":
+            # WRITE SAME writes one block NUM times from LBA — with
+            # --num=0 it writes to the end of the device, so a single
+            # invocation can clear the whole disk (the sg_write_same(8)
+            # man page warns exactly that) — but no check knew the
+            # tool at all (verified against ``_is_dangerous`` before
+            # this fix). The utility itself refuses to run without one
+            # of --in / --lba / --num, so a bare ``sg_write_same
+            # /dev/sda`` (which errors out) stays allowed, and a
+            # device named only as the --in data source stays allowed
+            # too — reading it is not a write. Value options per
+            # sg_write_same(8) (-g grpnum, -i in, -l lba, -n num, -t
+            # timeout, -w wrprotect, -x xferlen).
+            operands, shorts, longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset("gilntwx"),
+                value_longs=frozenset(
+                    ("grpnum", "in", "lba", "num", "timeout",
+                     "wrprotect", "xferlen")))
+            if not (shorts & {"i", "l", "n"}
+                    or longs & {"in", "lba", "num"}):
+                continue
+            if any(_is_raw_device_spelling(o) for o in operands):
+                return "SCSI write same"
+        elif name == "sg_unmap":
+            # UNMAP discards the named blocks — the SCSI equivalent
+            # of blkdiscard, which is already blocked — and --all
+            # unmaps from its start LBA to the end of the device, so
+            # ``sg_unmap --all=0,1k /dev/sda`` discards the whole
+            # disk; the man page gives it a 15-second cooling-off
+            # period "since a lot of data can be lost with this
+            # utility" — but no check knew the tool at all (verified
+            # against ``_is_dangerous`` before this fix). -d /
+            # --dry-run does the preparation and exits before any
+            # UNMAP is sent, so it stays allowed, the same way the
+            # --test dry runs of the LVM tools do. Value options per
+            # sg_unmap(8) (-A all, -g grpnum, -I in, -l lba, -n num,
+            # -t timeout). The --in file only names LBA/num pairs,
+            # so a device spelling there is a filename, never a
+            # write target — it is consumed as a value, not an
+            # operand.
+            operands, shorts, longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset("AgIlnt"),
+                value_longs=frozenset(
+                    ("all", "grpnum", "in", "lba", "num", "timeout")))
+            if "d" in shorts or longs & {"dry-run", "dry_run"}:
+                continue
+            if any(_is_raw_device_spelling(o) for o in operands):
+                return "SCSI unmap"
+        elif name == "sg_write_buffer":
+            # WRITE BUFFER sends data to the device — and modes 4-7
+            # download microcode, i.e. flash the device firmware —
+            # but no check knew the tool at all (verified against
+            # ``_is_dangerous`` before this fix). There is no
+            # read-only form: every non-dry-run invocation sends a
+            # WRITE BUFFER command to the named device. -d /
+            # --dry-run steps over the command and stays allowed.
+            # Value options per sg_write_buffer(8) (-b bpw, -i id,
+            # -I in, -l length, -m mode, -o offset, -s skip, -S
+            # specific, -t timeout).
+            operands, shorts, longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset("biIlmost"),
+                value_longs=frozenset(
+                    ("bpw", "id", "in", "length", "mode", "offset",
+                     "skip", "specific", "timeout")))
+            if "d" in shorts or longs & {"dry-run", "dry_run"}:
+                continue
+            if any(_is_raw_device_spelling(o) for o in operands):
+                return "SCSI write buffer"
+        elif name == "sg_write_long":
+            # WRITE LONG overwrites one block (plus ECC) at LBA —
+            # LBA 0 by default — with 0xff bytes unless --in gives
+            # the data, and --wr_uncor flags the block unrecoverable
+            # without transferring any data; either way the block is
+            # gone, and the man page's own workflow is to save the
+            # block with sg_read_long first because the write
+            # destroys it — but no check knew the tool at all
+            # (verified against ``_is_dangerous`` before this fix).
+            # No dry run and no safety interlock exist, so a bare
+            # ``sg_write_long /dev/sda`` blocks too. Value options
+            # per sg_write_long(8) (-i in, -l lba, -x xfer_len).
+            operands, _shorts, _longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset("ilx"),
+                value_longs=frozenset(("in", "lba", "xfer_len",
+                                       "xfer-len")))
+            if any(_is_raw_device_spelling(o) for o in operands):
+                return "SCSI write long"
+        elif name == "dd_rescue":
+            # dd_rescue (Kurt Garloff's, with the underscore) copies
+            # its infile to a plain positional outfile exactly like
+            # the ddrescue covered above — ``dd_rescue /dev/zero
+            # /dev/sda`` overwrites the device — but the ``dd`` in
+            # its name defeats the ``dd`` word boundary the same way
+            # ``dcfldd`` / ``dc3dd`` did, and its name never matched
+            # the ``ddrescue`` check either (verified against
+            # ``_is_dangerous`` before this fix). Only the outfile
+            # counts: the infile may be a device — reading it is the
+            # point — and an outfile that is a regular file stays
+            # allowed. In shred mode (-2/-3/-4/-z/-Z and the
+            # --shred2/--shred3/--shred4/--random/--frandom longs)
+            # there is no infile: the single operand IS the outfile
+            # the random data is written to, so that operand counts
+            # instead. -Y/--outfile/--of names secondary output
+            # files the same data is written to, and -l/--logfile
+            # and -o/--bbfile are file outputs too, so a device in
+            # any of them blocks, the same way rsync's --log-file
+            # and wget's -o do. Value options per dd_rescue(1) (-b
+            # softbs, -B hardbs, -e maxerr, -l logfile, -o bbfile,
+            # -y syncfreq, -s ipos, -S opos, -m maxxfer, -C
+            # ratecontrol, -@ sparse_nonslow, -2/-3/-4/-z/-Z seed,
+            # -c color, -Y outfile).
+            operands, shorts, longs, values = _split_tool_args(
+                args, value_shorts=frozenset("bBeCloSsmYy@234zZc"),
+                value_longs=frozenset(
+                    ("softbs", "bs", "hardbs", "block-size", "maxerr",
+                     "logfile", "bbfile", "syncfreq", "ipos",
+                     "input-position", "opos", "output-position",
+                     "maxxfer", "max-size", "ratecontrol",
+                     "sparse_nonslow", "shred2", "shred3", "shred4",
+                     "random", "frandom", "outfile", "of", "color")))
+            if any(_is_raw_device_spelling(v)
+                   for flag, v in values
+                   if flag in ("Y", "outfile", "of", "l", "logfile",
+                               "o", "bbfile")):
+                return "raw disk write"
+            if shorts & {"2", "3", "4", "z", "Z"} or longs & {
+                    "shred2", "shred3", "shred4", "random", "frandom"}:
+                if operands and _is_raw_device_spelling(operands[-1]):
+                    return "raw disk write"
+            elif len(operands) >= 2 and _is_raw_device_spelling(
+                    operands[1]):
+                return "raw disk write"
     return None
 
 
@@ -2289,7 +2445,14 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     and ``ddrescue`` with a raw-device outfile, each keeping its
     grow / read-only form (``lvresize -L +1G``, ``lvreduce`` /
     ``lvresize --test``, ``dcfldd`` reading a device to a file,
-    ``ddrescue`` to a regular file) — including
+    ``ddrescue`` to a regular file) — including the remaining
+    sg3_utils write tools (``sg_write_same`` with one of ``--in`` /
+    ``--lba`` / ``--num``, ``sg_unmap``, ``sg_write_buffer``,
+    ``sg_write_long``) and ``dd_rescue`` with a raw-device outfile
+    (copy mode) or shred target (``-2`` / ``-3`` / ``-4`` / ``-z`` /
+    ``-Z``), each keeping its dry run / safety interlock
+    (``sg_unmap`` / ``sg_write_buffer -d`` / ``--dry-run``,
+    bare ``sg_write_same``, ``dd_rescue`` to a regular file) — including
     dot-segment /
     doubled-slash spellings of the device
     (``/dev/./sda``, ``//dev/sda``), ``>|`` redirects to one, quoted

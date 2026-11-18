@@ -3,6 +3,36 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.34] - 2026-11-18
+
+### Fixed
+- **Exec blocklist: the remaining sg3_utils write tools and the
+  other rescue twin slipped past unchecked.** `sg_write_same`
+  writes one block NUM times from LBA — `--num=0` writes to the
+  end of the device, so one invocation can clear the whole disk
+  (its own man page warns exactly that); `sg_unmap` discards the
+  named blocks, the SCSI equivalent of the already-blocked
+  `blkdiscard`, and `--all` unmaps to the end of the device;
+  `sg_write_buffer` sends data to the device, and modes 4-7
+  download microcode, i.e. flash the device firmware;
+  `sg_write_long` overwrites one block (plus ECC) at LBA, LBA 0
+  by default — but none of the four matched any check. The same
+  hole stayed open for `dd_rescue` (Kurt Garloff's, with the
+  underscore): it copies its infile to a plain positional
+  outfile exactly like the `ddrescue` covered in 0.6.32, and in
+  shred mode (`-2` / `-3` / `-4` / `-z` / `-Z`) writes random
+  data to its single outfile operand — but its name matched
+  neither the `dd` word boundary nor the `ddrescue` check.
+  Precision is preserved: `sg_unmap` / `sg_write_buffer` keep
+  their `-d` / `--dry-run`, `sg_write_same` keeps its safety
+  interlock (a bare invocation errors out, so it stays allowed
+  without one of `--in` / `--lba` / `--num`), a device named
+  only as `sg_write_same`'s `--in` data source stays allowed,
+  and `dd_rescue` keeps reading a device to a regular file, as
+  do its log / bad-blocks / secondary outputs (`-l`, `-o`, `-Y`)
+  on regular files. New test pins the blocked spellings (40
+  cases) and the allowed ones (24 cases).
+
 ## [0.6.33] - 2026-11-17
 
 ### Fixed

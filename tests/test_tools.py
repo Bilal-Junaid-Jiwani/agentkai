@@ -1625,6 +1625,107 @@ def test_exec_blocklist_lvm_shrink_and_dd_twins_tools(reg):
         assert _is_dangerous(cmd) is None, cmd
 
 
+def test_exec_blocklist_sg_write_tools_and_dd_rescue(reg):
+    """Remaining sg3_utils write tools, and the other rescue twin.
+
+    ``sg_write_same`` writes one block NUM times from LBA —
+    ``--num=0`` writes to the end of the device, so one invocation
+    can clear the whole disk (its own man page warns exactly that);
+    ``sg_unmap`` discards the named blocks, the SCSI equivalent of
+    the already-blocked ``blkdiscard``, and ``--all`` unmaps to the
+    end of the device; ``sg_write_buffer`` sends data to the device,
+    and modes 4-7 download microcode, i.e. flash the device
+    firmware; ``sg_write_long`` overwrites one block (plus ECC) at
+    LBA, LBA 0 by default — but none of the four matched any check;
+    and ``dd_rescue`` (Kurt Garloff's, with the underscore) copies
+    its infile to a plain positional outfile exactly like the
+    ``ddrescue`` covered above, and in shred mode writes random
+    data to its single outfile operand — but its name matched
+    neither the ``dd`` word boundary nor the ``ddrescue`` check, so
+    both spellings passed unchecked (verified against
+    ``_is_dangerous`` before this fix). Blocked cases go through
+    exec (safe: exec blocks them); allowed cases use the
+    pure-function scan, since running them would write the target.
+    Precision is preserved: ``sg_unmap`` / ``sg_write_buffer``
+    keep their ``-d`` / ``--dry-run``, ``sg_write_same`` keeps its
+    safety interlock (a bare invocation errors out, so it stays
+    allowed without one of ``--in`` / ``--lba`` / ``--num``), a
+    device named only as ``sg_write_same``'s ``--in`` data source
+    stays allowed, and ``dd_rescue`` keeps reading a device to a
+    regular file, including its log / bad-blocks / secondary
+    outputs on regular files.
+    """
+    for cmd in ('sg_write_same --lba=0 --num=0 /dev/sda',
+                'sg_write_same --num=100 /dev/sda',
+                'sg_write_same -n 100 /dev/sda',
+                'sg_write_same -l 0 -n 63 /dev/sdc',
+                'sg_write_same --in=/tmp/zeros --num=10 /dev/sda',
+                'sg_write_same --unmap --lba=0 --num=100 /dev/sda',
+                'sg_write_same --lba=0 --num=10 /dev/nvme0n1',
+                'sg_write_same --lba=0 --num=10 /dev/mapper/vg-lv',
+                'sg_write_same --lba=0 --num=10 /dev/disk/by-id/ata-X',
+                'sudo sg_write_same --num=10 /dev/sda',
+                "bash -c 'sg_write_same --num=10 /dev/sda'",
+                'sg_unmap --lba=0 --num=100 /dev/sda',
+                'sg_unmap -l 0 -n 100 /dev/sda',
+                'sg_unmap --all=0,1k /dev/sda',
+                'sg_unmap --in=/tmp/pairs /dev/sda',
+                'sg_unmap --force --lba=0 --num=100 /dev/sda',
+                'sg_unmap --lba=0 --num=100 /dev/sdb',
+                'sg_write_buffer --mode=5 --in=/tmp/fw.bin /dev/sda',
+                'sg_write_buffer --in=/tmp/data /dev/sda',
+                'sg_write_buffer -m 5 -I /tmp/fw.bin /dev/sda',
+                'sg_write_buffer /dev/sda',
+                'sg_write_long /dev/sda',
+                'sg_write_long --lba=0x1234 /dev/sda',
+                'sg_write_long --lba=0x1234 --wr_uncor /dev/sda',
+                'sg_write_long -l 0 -i /tmp/blk /dev/sda',
+                'dd_rescue /dev/zero /dev/sda',
+                'dd_rescue /dev/sda /dev/sdb',
+                'dd_rescue -b 64k /dev/sda /dev/sdb',
+                'dd_rescue -f /dev/sda /dev/sdb',
+                'dd_rescue /dev/sda /tmp/img -Y /dev/sdb',
+                'dd_rescue --outfile=/dev/sdb /dev/sda /tmp/img',
+                'dd_rescue -l /dev/sda /dev/zero /tmp/img',
+                'dd_rescue -o /dev/sda /dev/zero /tmp/img',
+                'dd_rescue -2 /dev/urandom /dev/sda',
+                'dd_rescue --shred2 /dev/urandom /dev/sda',
+                'dd_rescue -z seedfile /dev/sda',
+                'dd_rescue --random seed /dev/sda',
+                'dd_rescue -4 seed /dev/sdb',
+                'sudo dd_rescue /dev/zero /dev/sda',
+                "bash -c 'dd_rescue /dev/sda /dev/sdb'"):
+        result = reg.get("exec").run(command=cmd)
+        assert isinstance(result, str), cmd
+        assert result.startswith("ERROR:") and "blocked" in result, cmd
+    from agentkai.tools import _is_dangerous
+    for cmd in ('sg_write_same /dev/sda',
+                'sg_write_same --unmap /dev/sda',
+                'sg_write_same --lba=0 --num=10 /tmp/disk.img',
+                'sg_write_same --in /dev/sda --num 1 /tmp/x',
+                'sg_write_same --num=10 /dev/null',
+                'sg_unmap --dry-run --lba=0 --num=100 /dev/sda',
+                'sg_unmap -d --all=0,1k /dev/sda',
+                'sg_unmap --dry_run --lba=0 --num=100 /dev/sda',
+                'sg_unmap --lba=0 --num=100 /tmp/disk.img',
+                'sg_write_buffer --dry-run --mode=5 --in=/tmp/fw.bin /dev/sda',
+                'sg_write_buffer -d /dev/sda',
+                'sg_write_buffer --in=/tmp/data /tmp/disk.img',
+                'sg_write_long --lba=0 /tmp/disk.img',
+                'sg_write_long --lba=0 /dev/null',
+                'dd_rescue /dev/sda /tmp/backup.img',
+                'dd_rescue /dev/sda /tmp/img mapfile',
+                'dd_rescue -l /tmp/log /dev/sda /tmp/img',
+                'dd_rescue -o /tmp/bb /dev/sda /tmp/img',
+                'dd_rescue -Y /tmp/copy2 /dev/sda /tmp/img',
+                'dd_rescue -2 /dev/urandom /tmp/out',
+                'dd_rescue --shred2 /dev/urandom /tmp/out',
+                'dd_rescue /dev/sda /dev/null',
+                'sg_inq /dev/sda',
+                'sg_read if=/dev/sda of=/tmp/x'):
+        assert _is_dangerous(cmd) is None, cmd
+
+
 def test_exec_blocklist_download_copy_output_targets(reg):
     """Download / copy tools writing their output to a raw device.
 
