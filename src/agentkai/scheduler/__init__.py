@@ -29,7 +29,7 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -139,6 +139,13 @@ def cron_matches(schedule: str, dt: datetime) -> bool:
     if dt.minute not in minute or dt.hour not in hour \
             or dt.month not in month:
         return False
+    return _day_matches(dom, dow, dt)
+
+
+def _day_matches(dom: set[int], dow: set[int],
+                 dt: datetime | date) -> bool:
+    """Vixie dom/dow rule for one day: restricted dom and dow are ORed,
+    an unrestricted side defers to the other, both unrestricted match."""
     dom_match = dt.day in dom
     # Python: Monday=0..Sunday=6 ; cron: Sunday=0..Saturday=6
     cron_dow = (dt.weekday() + 1) % 7
@@ -146,27 +153,50 @@ def cron_matches(schedule: str, dt: datetime) -> bool:
     dom_star = dom == set(range(1, 32))
     dow_star = dow == set(range(0, 7))
     if dom_star and dow_star:
-        day_ok = True
-    elif dom_star:
-        day_ok = dow_match
-    elif dow_star:
-        day_ok = dom_match
-    else:
-        day_ok = dom_match or dow_match
-    return day_ok
+        return True
+    if dom_star:
+        return dow_match
+    if dow_star:
+        return dom_match
+    return dom_match or dow_match
+
+
+# Longest gap between occurrences of any schedule that can fire at all:
+# a Feb-29-only schedule, from the March after one leap day to the next,
+# is just under four years — so a five-year horizon always finds it.
+_CRON_NEXT_HORIZON_DAYS = 366 * 5
 
 
 def cron_next(schedule: str, after: datetime) -> datetime:
-    """Next datetime strictly after ``after`` matching the schedule."""
-    parse_cron(schedule)  # validate eagerly
-    candidate = (after + timedelta(minutes=1)).replace(second=0,
-                                                      microsecond=0)
-    limit = after + timedelta(days=366)
-    while candidate <= limit:
-        if cron_matches(schedule, candidate):
-            return candidate
-        candidate += timedelta(minutes=1)
-    raise ValueError(f"no cron occurrence within a year of {after}")
+    """Next datetime strictly after ``after`` matching the schedule.
+
+    Steps day by day (not minute by minute): the old minute scan
+    re-parsed the schedule on every step, so a Feb-29 schedule took
+    ~15s to conclude "no occurrence within a year" — and then raised,
+    which made leap-day jobs permanently undue (``_is_due`` swallows
+    that ValueError). Day-stepping finds the same next occurrence in
+    milliseconds and reaches across leap-day cycles.
+    """
+    minute, hour, dom, month, dow = parse_cron(schedule)
+    start = (after + timedelta(minutes=1)).replace(second=0, microsecond=0)
+    day = start.date()
+    limit = (after + timedelta(days=_CRON_NEXT_HORIZON_DAYS)).date()
+    hours = sorted(hour)
+    minutes = sorted(minute)
+    while day <= limit:
+        if day.month in month:
+            # date has .day/.weekday() just like datetime, so the
+            # same dom/dow rule applies.
+            if _day_matches(dom, dow, day):
+                for h in hours:
+                    for m in minutes:
+                        cand = datetime(
+                            day.year, day.month, day.day, h, m,
+                            tzinfo=start.tzinfo)
+                        if cand > after:
+                            return cand
+        day += timedelta(days=1)
+    raise ValueError(f"no cron occurrence within five years of {after}")
 
 
 def parse_at(schedule: str) -> datetime:
@@ -184,14 +214,43 @@ def validate_schedule(schedule: str) -> None:
 
     ``Scheduler.add`` calls this so every entry path (CLI, dashboard API,
     direct use) rejects garbage like ``"not a cron"`` at add time instead
-    of storing a job that can never fire.
+    of storing a job that can never fire. That includes impossible
+    dates: ``"0 0 31 2 *"`` parses fine, but no February ever has a
+    31st, so the job would sit in the store forever and never run.
     """
     if not schedule or not schedule.strip():
         raise ValueError("schedule is empty")
     if schedule.startswith("@at:"):
         parse_at(schedule)
     else:
-        parse_cron(schedule)
+        parsed = parse_cron(schedule)
+        if not _cron_can_fire(parsed):
+            raise ValueError(
+                f"cron schedule can never fire: {schedule!r} — no listed "
+                "month has that day-of-month")
+
+
+# Days in each month, with February counted as 29: a Feb-29 schedule
+# fires in leap years, so it can fire — unlike Feb 30/31, which never can.
+_DAYS_IN_MONTH = {1: 31, 2: 29, 3: 31, 4: 30, 5: 31, 6: 30,
+                  7: 31, 8: 31, 9: 30, 10: 31, 11: 30, 12: 31}
+
+
+def _cron_can_fire(parsed: tuple[set[int], ...]) -> bool:
+    """False when a cron schedule can never match any real date.
+
+    The day can only fail to fire when the day-of-month is restricted
+    and the day-of-week is not: a restricted dow fires every week on
+    its own (the Vixie dom/dow OR), and an unrestricted dom matches
+    every day of every listed month. So only a restricted dom with an
+    unrestricted dow needs a month that actually holds one of its days
+    (``"0 0 31 4 *"`` never fires; ``"0 0 31 2 1"`` fires on Mondays,
+    ``"0 0 29 2 *"`` fires every leap day).
+    """
+    _minute, _hour, dom, month, dow = parsed
+    if dom == set(range(1, 32)) or dow != set(range(0, 7)):
+        return True
+    return any(day <= _DAYS_IN_MONTH[m] for day in dom for m in month)
 
 
 # -- heartbeat / dreaming prompts --------------------------------------------

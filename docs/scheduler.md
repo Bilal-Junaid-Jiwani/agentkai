@@ -43,7 +43,9 @@ agentkai scheduler remove remind-call
 
 Schedules are validated when a job is added — an expression that is not
 a valid 5-field cron spec (or a valid `--at` datetime) is rejected with
-an error instead of being stored as a job that could never fire. The
+an error instead of being stored as a job that could never fire. That
+includes impossible dates such as `0 0 31 2 *` (no February has a 31st);
+Feb 29 schedules are accepted and fire on leap days. The
 same validation applies to jobs created through the dashboard API.
 
 ## Safety: unattended jobs can't ask

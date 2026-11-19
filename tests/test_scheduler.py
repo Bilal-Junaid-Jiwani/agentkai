@@ -22,6 +22,7 @@ from agentkai.scheduler import (
     cron_next,
     parse_at,
     parse_cron,
+    validate_schedule,
 )
 
 
@@ -92,6 +93,75 @@ def test_cron_next_invalid_raises():
         cron_next("not a cron", dt("2026-09-29T10:00"))
 
 
+def test_cron_next_finds_leap_day():
+    # A Feb-29 job created after February in a non-leap year used to raise
+    # "no cron occurrence within a year" and so never became due.
+    assert cron_next("0 0 29 2 *", dt("2026-03-01T00:00")) == \
+        dt("2028-02-29T00:00")
+    assert cron_next("0 0 29 2 *", dt("2028-03-01T00:00")) == \
+        dt("2032-02-29T00:00")
+    # strictly after: on the leap day itself it moves to the next leap day
+    assert cron_next("0 0 29 2 *", dt("2028-02-29T00:00")) == \
+        dt("2032-02-29T00:00")
+    # an impossible date has no occurrence at all, even over five years
+    with pytest.raises(ValueError):
+        cron_next("0 0 31 2 *", dt("2026-03-01T00:00"))
+
+
+def test_cron_next_matches_minute_scan():
+    """Day-stepping must return exactly what the old minute-by-minute
+    scan returned, wherever the old scan found one."""
+    def minute_scan(schedule, after):
+        cand = (after + timedelta(minutes=1)).replace(second=0,
+                                                     microsecond=0)
+        limit = after + timedelta(days=366)
+        while cand <= limit:
+            if cron_matches(schedule, cand):
+                return cand
+            cand += timedelta(minutes=1)
+        raise ValueError("no occurrence within a year")
+
+    schedules = ["* * * * *", "*/15 * * * *", "0 9 * * *", "0 0 1 1 *",
+                 "30 4 1,15 * 5", "*/7 3-5 * * 0,6", "45 23 28-31 * *",
+                 "0 0 * * 1-5", "15 10 * 2 *", "59 23 29 2 *", "0 6 1 1 1"]
+    starts = [dt("2026-11-19T08:00"), dt("2026-02-27T23:59"),
+              dt("2027-12-31T23:30"), dt("2028-02-28T12:00"),
+              dt("2026-09-29T10:07")]
+    for schedule in schedules:
+        for start in starts:
+            try:
+                expected = minute_scan(schedule, start)
+            except ValueError:
+                continue  # old scan gave up; leap-day cases are covered above
+            assert cron_next(schedule, start) == expected, \
+                (schedule, start)
+
+
+def test_cron_next_leap_day_is_fast():
+    # The old scan re-parsed the schedule every minute and took ~15s to
+    # fail a Feb-29 lookup; day-stepping answers in milliseconds.
+    import time
+    t0 = time.monotonic()
+    assert cron_next("0 0 29 2 *", dt("2026-03-01T00:00")) == \
+        dt("2028-02-29T00:00")
+    assert time.monotonic() - t0 < 2
+
+
+def test_validate_schedule_rejects_impossible_dates():
+    # Parses fine, but no listed month ever has that day — a job that
+    # can never fire, refused at add time like any other garbage.
+    for bad in ("0 0 31 2 *", "0 0 30 2 *", "0 0 31 4 *", "0 0 31 6 *",
+                "0 0 31 9 *", "0 0 31 11 *", "0 0 31 4,6,9,11 *",
+                "0 0 30-31 2 *"):
+        with pytest.raises(ValueError):
+            validate_schedule(bad)
+    # Feb 29 fires in leap years; a restricted dow fires on its own
+    # (Vixie OR); a day some listed month holds is fine.
+    for good in ("0 0 29 2 *", "0 0 31 1,2 *", "0 0 31 2 1",
+                 "0 0 30 4 *", "0 0 31 1 *", "0 0 29 2 0"):
+        validate_schedule(good)
+
+
 # -- one-shot parsing ----------------------------------------------------------
 
 def test_parse_at():
@@ -130,7 +200,8 @@ def test_add_rejects_garbage_schedule(tmp_path):
     """add() validates eagerly: a job that can never fire is refused."""
     s = Scheduler(db=tmp_path / "sched.db")
     for bad in ("not a cron", "", "   ", "* * * *", "61 * * * *",
-                "0 0 32 1 *", "0 0 * 13 *", "@at:not-a-date", "@at:"):
+                "0 0 32 1 *", "0 0 * 13 *", "@at:not-a-date", "@at:",
+                "0 0 31 2 *", "0 0 31 4 *"):
         with pytest.raises(ValueError):
             s.add(Job(name="bad", schedule=bad, prompt="x"))
     assert s.list() == []  # nothing was stored
@@ -217,6 +288,20 @@ def test_run_due_skips_not_due(tmp_path):
               last_run=dt("2026-09-29T10:00").isoformat()))
     assert s.run_due(now=dt("2026-09-29T10:07")) == []
     assert log == []
+    s.close()
+
+
+def test_run_due_finds_leap_day_job(tmp_path):
+    """A Feb-29 job created in March of a non-leap year becomes due on
+    the next leap day (it used to be permanently undue)."""
+    log: list[str] = []
+    s = Scheduler(db=tmp_path / "s.db", agent_factory=fake_factory(log))
+    s.add(Job(name="leap", schedule="0 0 29 2 *", prompt="leap day",
+              created_ts=dt("2026-03-01T00:00").isoformat()))
+    assert s.run_due(now=dt("2028-02-28T00:00")) == []
+    results = s.run_due(now=dt("2028-02-29T00:00"))
+    assert len(results) == 1 and results[0]["status"] == "done"
+    assert log == ["claude"]
     s.close()
 
 

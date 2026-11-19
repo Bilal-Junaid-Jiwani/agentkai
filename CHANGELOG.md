@@ -3,6 +3,31 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.35] - 2026-11-19
+
+### Fixed
+- **Scheduler: impossible cron dates were accepted and leap-day jobs
+  could never run.** `validate_schedule` — and therefore
+  `Scheduler.add`, the CLI, and the dashboard API — accepted
+  schedules like `0 0 31 2 *` that parse fine but can never fire: no
+  February ever has a 31st, so the job sat in the store forever and
+  never ran, contradicting the documented promise that "a job that can
+  never fire is refused". Impossible day-of-month / month combinations
+  (`31 2`, `30 2`, `31 4/6/9/11`) are now rejected at add time, while
+  Feb 29 stays accepted (it fires in leap years) and a restricted
+  day-of-week still saves a schedule through the Vixie dom/dow OR
+  (`0 0 31 2 1` fires on Mondays). The same root cause broke leap-day
+  jobs the other way: `cron_next` stepped minute by minute with a
+  one-year horizon and re-parsed the schedule on every step, so
+  `0 0 29 2 *` from March of a non-leap year took ~15s to raise "no
+  cron occurrence within a year" — and `_is_due` swallows that error,
+  so the job was permanently undue. `cron_next` now steps day by day
+  over a five-year horizon, finding the next leap day in ~1ms. New
+  tests pin the rejections, the leap-day next-runs (2026-03-01 →
+  2028-02-29, 2028-03-01 → 2032-02-29), a full equivalence check of
+  the new scan against the old minute scan over 11 schedules × 5
+  start times, and a due-run of a leap-day job on 2028-02-29.
+
 ## [0.6.34] - 2026-11-18
 
 ### Fixed
