@@ -1808,3 +1808,137 @@ def test_exec_blocklist_download_copy_output_targets(reg):
                 'scp /tmp/img user@host:/dev/sda',
                 'scp -P 2222 /tmp/img /tmp/other'):
         assert _is_dangerous(cmd) is None, cmd
+
+
+def test_exec_blocklist_archive_device_targets(reg):
+    """Archive tools writing their output archive onto a raw device.
+
+    ``tar -cf`` writes the archive to the ``-f`` file, so ``tar -cf
+    /dev/sda /tmp/foo`` overwrites the disk with a tar stream exactly
+    like ``cp`` to it — but no pattern or token check knew the archive
+    tools at all (verified against ``_is_dangerous`` before this fix).
+    The same write spelled through the other archivers: ``zip
+    /dev/sda file`` (the archive is the first operand), ``7z a
+    /dev/sda file`` (the add subcommand), ``cpio -o -F /dev/sda``
+    (the copy-out archive), ``mksquashfs /tmp/foo /dev/sda`` (the
+    filesystem image), and ``genisoimage -o /dev/sda dir`` (the ISO
+    image). Blocked cases go through exec (safe: exec blocks them);
+    allowed cases use the pure-function scan, since running them
+    would write the target. Precision is preserved: every read form
+    stays allowed — ``tar -tf`` / ``-xf`` / ``-df``, ``zip -T``,
+    ``7z x`` / ``l`` / ``t``, ``cpio -i`` — as does a device named
+    as an input (``tar -cf /tmp/x.tar /dev/sda`` archives the device,
+    ``mksquashfs /dev/sda /tmp/x.sqfs`` squashes it), and a device
+    spelling as another option's value (``tar -C /dev/sda`` changes
+    directory, ``tar -T /dev/sda`` reads the file list).
+    """
+    for cmd in ('tar -cf /dev/sda /tmp/foo',
+                'tar -czf /dev/sda /tmp/foo',
+                'tar -cf/dev/sda /tmp/foo',
+                'tar --create --file=/dev/sda /tmp/foo',
+                'tar --create -f /dev/sda /tmp/foo',
+                'tar -rf /dev/sda /tmp/foo',
+                'tar -uf /dev/sda /tmp/foo',
+                'tar -Af /dev/sda /tmp/other.tar',
+                'tar --delete -f /dev/sda file',
+                'tar -cf /dev/mem /tmp/foo',
+                'tar -cf /dev/disk/by-id/ata-XYZ /tmp/foo',
+                'tar -cf /dev/mapper/vg-lv /tmp/foo',
+                'tar -c -g /dev/sda -f /tmp/x.tar /tmp/foo',
+                'tar -c --listed-incremental=/dev/sda -f /tmp/x.tar /tmp/foo',
+                'sudo tar -cf /dev/sda /tmp/foo',
+                "bash -c 'tar -cf /dev/sda /tmp/foo'",
+                'tar -cf /dev/sda /tmp/foo; echo done',
+                'zip /dev/sda file.txt',
+                'zip -r /dev/sda dir',
+                'zip -d /dev/sda entry',
+                'zip -m /dev/sda file.txt',
+                'zip /dev/nvme0n1 file.txt',
+                'zip /dev/disk/by-id/ata-XYZ file.txt',
+                'zip -s 64m /dev/sda file.txt',
+                'zip -P secret /dev/sda file.txt',
+                "zip /dev/sda file.txt -x '*.o'",
+                'sudo zip /dev/sda file.txt',
+                "bash -c 'zip /dev/sda file.txt'",
+                '7z a /dev/sda file.txt',
+                '7z a -tzip /dev/sda file.txt',
+                '7z a /dev/sda file.txt -o/tmp/out',
+                '7z a -pSecret /dev/sda file.txt',
+                '7z d /dev/sda entry',
+                '7z u /dev/sda file.txt',
+                '7z rn /dev/sda old new',
+                '7za a /dev/sda file.txt',
+                '7z a /dev/nvme0n1 file.txt',
+                "bash -c '7z a /dev/sda file.txt'",
+                'cpio -o -F /dev/sda',
+                'cpio -o --file=/dev/sda',
+                'cpio -o --file /dev/sda',
+                'cpio -ovF/dev/sda',
+                'cpio -o -F /dev/mem',
+                'cpio --create -F /dev/sda',
+                "bash -c 'cpio -o -F /dev/sda'",
+                'mksquashfs /tmp/foo /dev/sda',
+                'mksquashfs /tmp/foo /dev/sda -noappend',
+                "mksquashfs /tmp/foo /dev/sda -e '*.o'",
+                'mksquashfs /a /b /dev/sda',
+                'mksquashfs /tmp/foo /dev/nvme0n1',
+                'mksquashfs /tmp/foo /dev/disk/by-id/ata-XYZ',
+                'mksquashfs -- /tmp/foo /dev/sda',
+                "bash -c 'mksquashfs /tmp/foo /dev/sda'",
+                'genisoimage -o /dev/sda /tmp/foo',
+                'genisoimage -o/dev/sda /tmp/foo',
+                'genisoimage --output /dev/sda /tmp/foo',
+                'genisoimage --output=/dev/sda /tmp/foo',
+                'genisoimage -Jo /dev/sda /tmp/foo',
+                'mkisofs -o /dev/sda /tmp/foo',
+                'genisoimage -log-file /dev/sda /tmp/foo',
+                'genisoimage --log-file=/dev/sda /tmp/foo',
+                'genisoimage -o /tmp/x.iso -log-file /dev/sda /tmp/foo',
+                "bash -c 'genisoimage -o /dev/sda /tmp/foo'"):
+        result = reg.get("exec").run(command=cmd)
+        assert isinstance(result, str), cmd
+        assert result.startswith("ERROR:") and "blocked" in result, cmd
+    from agentkai.tools import _is_dangerous
+    for cmd in ('tar -tf /dev/sda',
+                'tar -xf /dev/sda',
+                'tar -xf /dev/sda -C /tmp/out',
+                'tar -df /dev/sda',
+                'tar --test-label -f /dev/sda',
+                'tar -cf /tmp/x.tar /tmp/foo',
+                'tar -cf /dev/null /tmp/foo',
+                'tar -cf - /tmp/foo',
+                'tar -c /dev/sda',
+                'tar -cf /tmp/x.tar /dev/sda',
+                'tar -c -T /dev/sda -f /tmp/x.tar /tmp/foo',
+                'tar -c -C /dev/sda -f /tmp/x.tar /tmp/foo',
+                'tar -x -g /dev/sda -f /tmp/x.tar',
+                'zip -T /dev/sda',
+                'zip --test /dev/sda',
+                'zip /tmp/x.zip file.txt',
+                'zip /dev/null file.txt',
+                'zip -h',
+                'zip --help',
+                "zip -r /tmp/x.zip dir -x '*.o'",
+                '7z x /dev/sda',
+                '7z l /dev/sda',
+                '7z t /dev/sda',
+                '7z e /dev/sda',
+                '7z a /tmp/x.7z file.txt',
+                '7z a /dev/null file.txt',
+                '7z a -tzip /tmp/x.zip file.txt',
+                'cpio -i -F /dev/sda',
+                'cpio -i --file /dev/sda',
+                'cpio -o -F /tmp/x.cpio',
+                'cpio -o -F /dev/null',
+                'cpio -p /tmp/dest',
+                'cpio -F /dev/sda',
+                'mksquashfs /dev/sda /tmp/x.sqfs',
+                'mksquashfs /tmp/foo /tmp/x.sqfs',
+                'mksquashfs /tmp/foo /dev/null',
+                'mksquashfs /tmp/foo',
+                'genisoimage -o /tmp/x.iso /tmp/foo',
+                'genisoimage -o - /tmp/foo',
+                'genisoimage -o /dev/null /tmp/foo',
+                'genisoimage /tmp/foo',
+                'genisoimage -log-file /tmp/gen.log -o /tmp/x.iso /tmp/foo'):
+        assert _is_dangerous(cmd) is None, cmd

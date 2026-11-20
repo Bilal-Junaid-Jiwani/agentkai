@@ -3,6 +3,27 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.36] - 2026-11-20
+
+### Fixed
+- **Exec blocklist: archive tools writing their output archive onto a
+  raw device slipped past unchecked.** `tar -cf /dev/sda /tmp/foo`
+  overwrites the disk with a tar stream exactly like `cp` to it, and
+  the same write spelled through the other archivers — `zip /dev/sda
+  file` (the archive is the first operand), `7z a /dev/sda file`
+  (the add subcommand; `7za` / `7zr` are the same tool), `cpio -o
+  -F /dev/sda` (the copy-out archive), `mksquashfs /tmp/foo
+  /dev/sda` (the filesystem image) and `genisoimage -o /dev/sda dir`
+  (`mkisofs` is the same tool) — matched no pattern or token check.
+  Precision is preserved: every read form stays allowed (`tar -tf` /
+  `-xf` / `-df`, `zip -T`, `7z x` / `l` / `t`, `cpio -i`), as does a
+  device named as an input (`tar -cf /tmp/x.tar /dev/sda`,
+  `mksquashfs /dev/sda /tmp/x.sqfs`) or as another option's value
+  (`tar -C` / `-T`), and `tar`'s `-g` snapshot file blocks in a
+  write mode only, while `genisoimage`'s `-log-file` blocks like
+  `wget -o` / `rsync --log-file`. New test pins the blocked
+  spellings (63 cases) and the allowed ones (42 cases).
+
 ## [0.6.35] - 2026-11-19
 
 ### Fixed

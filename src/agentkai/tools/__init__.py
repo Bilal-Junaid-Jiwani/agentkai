@@ -1440,6 +1440,152 @@ def _device_wipe_reason(tokens: list[str]) -> str | None:
     return None
 
 
+# Archive tools writing their output archive onto a raw device:
+# ``tar -cf`` writes the archive to the ``-f`` file, so ``tar -cf
+# /dev/sda /tmp/foo`` overwrites the disk with a tar stream exactly
+# like ``cp`` to it — but no pattern or token check knew the archive
+# tools at all (verified against ``_is_dangerous`` before this fix).
+# The same write spelled through the other archivers: ``zip /dev/sda
+# file`` writes the zip archive onto the disk (the archive is the
+# first operand); ``7z a /dev/sda file`` writes it under the add
+# subcommand (``7za`` / ``7zr`` are the same tool); ``cpio -o -F
+# /dev/sda`` writes the copy-out archive to the ``-F`` file;
+# ``mksquashfs /tmp/foo /dev/sda`` writes the squashfs image to its
+# filesystem operand; ``genisoimage -o /dev/sda dir`` (``mkisofs``
+# is the same tool) writes the ISO image to the ``-o`` file. Only the
+# output archive counts, so every read form stays allowed: ``tar
+# -tf`` / ``-xf`` / ``-df`` list, extract or compare the archive
+# (reading a device is the point), ``zip -T`` tests it, ``7z x`` /
+# ``l`` / ``t`` extract, list or test it, and ``cpio -i`` reads it —
+# as does a device named as an input (``tar -cf /tmp/x.tar /dev/sda``
+# archives the device, ``mksquashfs /dev/sda /tmp/x.sqfs`` squashes
+# it). ``tar``'s ``-g`` snapshot file is a write too, so a device
+# there blocks in a write mode, and ``genisoimage``'s ``-log-file``
+# is a file output the same way ``wget -o`` / ``rsync --log-file``
+# are. Value options are consumed so their values are never mistaken
+# for the archive (``zip -s``, ``7z -o``, ``tar -C``), and
+# ``mksquashfs`` takes its filesystem image as the last positional
+# before the options, so a device named only as a source stays
+# allowed.
+def _archive_device_reason(tokens: list[str]) -> str | None:
+    for i, tok in enumerate(tokens):
+        name = _basename(tok)
+        args = _args_until_separator(tokens, i + 1)
+        if name == "tar":
+            # -f/--file is the archive; -g/--listed-incremental is
+            # the snapshot file tar writes during a create. Only the
+            # write modes (create, append, update, concatenate,
+            # delete) write the archive: -t lists it, -x extracts
+            # it, -d compares it — all reads. Value options per tar
+            # --help (-F info script, -T files-from, -C directory,
+            # -V label, -X exclude file, -K starting file, -N newer
+            # date, -L tape length, -b blocking factor, -g snapshot
+            # file) and their long forms, so their values are never
+            # mistaken for the archive.
+            _operands, shorts, longs, values = _split_tool_args(
+                args, value_shorts=frozenset("fFTCVXKNLbg"),
+                value_longs=frozenset(
+                    ("file", "label", "exclude", "files-from",
+                     "info-script", "newer-mtime", "newer",
+                     "after-date", "transform", "xform", "directory",
+                     "listed-incremental", "tape-length",
+                     "blocking-factor", "starting-file",
+                     "exclude-from", "occurrence", "level", "sort",
+                     "format", "index-file")))
+            if not (shorts & {"c", "r", "u", "A"} or longs & {
+                    "create", "append", "update", "concatenate",
+                    "catenate", "delete"}):
+                continue
+            for flag, val in values:
+                if flag in ("f", "file", "g", "listed-incremental") \
+                        and val and _is_raw_device_spelling(val):
+                    return "raw disk write"
+        elif name == "zip":
+            # The archive is the first operand. -T/--test only tests
+            # it (read-only); -h/--help and --version only print.
+            # Value options per zip --help (-b temp path, -P
+            # password, -s split size, -t date, -n suffixes), so
+            # their values are never mistaken for the archive.
+            operands, shorts, longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset("bPstn"))
+            if shorts & {"T", "h"} or longs & {
+                    "test", "help", "version"}:
+                continue
+            if operands and _is_raw_device_spelling(operands[0]):
+                return "raw disk write"
+        elif name in ("7z", "7za", "7zr"):
+            # Subcommand first, archive second: only the write
+            # subcommands (a add, d delete, u update, rn rename)
+            # write the archive — x/e extract it, l lists it, t
+            # tests it. Value options per 7z --help (-o output dir,
+            # -p password, -m method, -t type, -w working dir, -v
+            # volume size), so their values are never mistaken for
+            # the archive.
+            operands, _shorts, _longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset("opmtwv"))
+            if len(operands) < 2 or operands[0] not in (
+                    "a", "d", "u", "rn"):
+                continue
+            if _is_raw_device_spelling(operands[1]):
+                return "raw disk write"
+        elif name == "cpio":
+            # -F/--file is the archive, but only in copy-out mode:
+            # -o writes it, -i reads it, -p passes files through
+            # with no archive at all.
+            _operands, shorts, longs, values = _split_tool_args(
+                args, value_shorts=frozenset("F"),
+                value_longs=frozenset(("file",)))
+            if "o" not in shorts and "create" not in longs:
+                continue
+            for flag, val in values:
+                if flag in ("F", "file") and val \
+                        and _is_raw_device_spelling(val):
+                    return "raw disk write"
+        elif name == "mksquashfs":
+            # Sources, then the filesystem image, then options: the
+            # image is the last positional before the first option
+            # token, so a device named only as a source stays
+            # allowed. -- ends option parsing; everything after it
+            # is positional.
+            positionals: list[str] = []
+            j = 0
+            while j < len(args):
+                arg = args[j]
+                if arg == "--":
+                    positionals.extend(args[j + 1:])
+                    break
+                if arg.startswith("-") and arg != "-":
+                    break
+                positionals.append(arg)
+                j += 1
+            if len(positionals) >= 2 and _is_raw_device_spelling(
+                    positionals[-1]):
+                return "raw disk write"
+        elif name in ("genisoimage", "mkisofs"):
+            # -o/--output is the ISO file. -log-file is a file
+            # output too, the same way wget -o / rsync --log-file
+            # are — but it is a single-dash long option, so the
+            # cluster parse reads its 'o' as the -o value flag and
+            # its value lands as an operand; check it by hand.
+            for j, arg in enumerate(args):
+                if arg in ("-log-file", "--log-file") \
+                        and j + 1 < len(args) \
+                        and _is_raw_device_spelling(args[j + 1]):
+                    return "raw disk write"
+                if arg.startswith("--log-file=") \
+                        and _is_raw_device_spelling(
+                            arg.split("=", 1)[1]):
+                    return "raw disk write"
+            _operands, _shorts, _longs, values = _split_tool_args(
+                args, value_shorts=frozenset("o"),
+                value_longs=frozenset(("output",)))
+            for flag, val in values:
+                if flag in ("o", "output") and val \
+                        and _is_raw_device_spelling(val):
+                    return "raw disk write"
+    return None
+
+
 def _split_tool_args(args: list[str], value_shorts: frozenset | None = None,
                      value_longs: frozenset | None = None):
     """Split a tool's args into operands, flags, and option values.
@@ -2427,6 +2573,9 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     and catches ``find / -delete``, download-piped-to-shell one-liners,
     ``cp``/``mv``/``tee``/``install`` writes to a raw disk or memory
     device (and ``curl``/``wget``/``rsync``/``scp`` output targets),
+    archive tools writing their output archive onto one (``tar -cf``,
+    ``zip``, ``7z a``, ``cpio -o -F``, ``mksquashfs``,
+    ``genisoimage -o``),
     ``shred``/``wipefs``/``blkdiscard`` aimed at one, and
     format / partition / volume tools aimed at one (``mke2fs``,
     ``mkswap``, ``fdisk``, ``parted``, ``sgdisk``, ``sfdisk``,
@@ -2565,6 +2714,7 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
             or _chmod_reason(tokens) or _raw_device_reason(tokens)
             or _device_wipe_reason(tokens)
             or _format_device_reason(tokens)
+            or _archive_device_reason(tokens)
             or _nested_reason(tokens, _depth))
 
 
