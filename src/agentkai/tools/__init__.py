@@ -1586,6 +1586,139 @@ def _archive_device_reason(tokens: list[str]) -> str | None:
     return None
 
 
+# Disk-image tools writing their output image onto a raw device:
+# ``qemu-img convert`` is the standard way to write a VM image onto
+# a physical disk — ``qemu-img convert -O raw image.qcow2 /dev/sda``
+# streams the whole image onto the disk exactly like ``dd`` to it —
+# but no pattern or token check knew the image tools at all (verified
+# against ``_is_dangerous`` before this fix). The same write spelled
+# through the other image tools: ``qemu-img create -f raw /dev/sda
+# 10G`` (the image file is created on the device), ``VBoxManage
+# convertfromraw image.raw /dev/sda`` and ``VBoxManage clonemedium
+# disk image.vdi /dev/sda`` (the output medium is the last operand),
+# ``virt-sparsify image.qcow2 /dev/sda`` and ``virt-resize
+# image.qcow2 /dev/sda`` (the output disk is the last operand). Only
+# the output image counts, so every read form stays allowed
+# (``qemu-img info`` / ``check`` / ``compare`` / ``map`` /
+# ``measure``, ``VBoxManage showmediuminfo``, a device named as an
+# input — ``qemu-img convert /dev/sda /tmp/x.img`` reads the disk
+# into a file, ``virt-sparsify /dev/sda /tmp/out.qcow2`` sparsifies
+# it into one), as does a device spelling as another option's value
+# (``qemu-img convert -B /dev/sda`` names the backing file,
+# ``qemu-img create -b /dev/sda`` the same, ``virt-resize --expand
+# /dev/sda1`` the partition to grow). ``qemu-img resize`` only
+# shrinks with ``--shrink`` (without it a shrink is refused), so
+# only that spelling blocks, and ``virt-sparsify --in-place``
+# rewrites its single operand in place, so a raw-device operand
+# blocks there too. With ``--image-opts`` / ``--target-image-opts``
+# the output file is spelled as ``filename=`` inside the option
+# string instead of a plain positional
+# (``driver=file,filename=/dev/sda``), so that spelling is checked
+# too — and so is the JSON form (``{"filename": "/dev/sda"}``).
+def _is_image_target(tok: str) -> bool:
+    if _is_raw_device_spelling(tok):
+        return True
+    for part in tok.split(","):
+        if "filename=" in part:
+            if _is_raw_device_spelling(
+                    part.split("filename=", 1)[1]):
+                return True
+    match = re.search(r'"filename"\s*:\s*"([^"]+)"', tok)
+    if match and _is_raw_device_spelling(match.group(1)):
+        return True
+    return False
+
+
+def _image_device_reason(tokens: list[str]) -> str | None:
+    for i, tok in enumerate(tokens):
+        name = _basename(tok)
+        args = _args_until_separator(tokens, i + 1)
+        if name == "qemu-img":
+            # Value options per qemu-img --help (-f input format,
+            # -O output format, -B backing file (convert) / -b
+            # backing file (create), -F backing format, -o options,
+            # -l snapshot name, -s snapshot id, -t cache mode, -T
+            # source cache mode, -S sparse size, -r rate limit, -m
+            # coroutines) and their long forms (--preallocation
+            # takes a value; --image-opts / --target-image-opts /
+            # --force-share are plain flags), so their values are
+            # never mistaken for the output image.
+            # ``qemu-img dd`` is already caught by the generic
+            # ``dd of=`` pattern, so it needs no branch here.
+            operands, _shorts, longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset("fOBFbolstTSrm"),
+                value_longs=frozenset(("object", "preallocation")))
+            if not operands:
+                continue
+            subcommand = operands[0]
+            if subcommand == "convert":
+                # infile, then outfile: only the outfile is a write.
+                if len(operands) >= 3 and _is_image_target(
+                        operands[-1]):
+                    return "raw disk write"
+            elif subcommand == "create":
+                # filename, then size: the filename is the write.
+                if len(operands) >= 2 and _is_image_target(
+                        operands[1]):
+                    return "raw disk write"
+            elif subcommand == "resize":
+                # Only --shrink can shrink: without it qemu-img
+                # refuses to shrink, and a grow writes nothing
+                # past the old end.
+                if "shrink" in longs and len(operands) >= 2 and \
+                        _is_raw_device_spelling(operands[1]):
+                    return "raw disk write"
+        elif name == "VBoxManage":
+            # Value options per VBoxManage --help (--format,
+            # --variant, --existing), so their values are never
+            # mistaken for the output medium.
+            operands, _shorts, _longs, _vals = _split_tool_args(
+                args, value_longs=frozenset(
+                    ("format", "variant", "existing")))
+            if not operands:
+                continue
+            subcommand = operands[0]
+            if subcommand == "convertfromraw":
+                # infile, then outfile.
+                if len(operands) >= 3 and _is_raw_device_spelling(
+                        operands[2]):
+                    return "raw disk write"
+            elif subcommand in ("clonemedium", "clonehd"):
+                # [disk|dvd|floppy] src dst: the destination medium
+                # is the last operand.
+                rest = operands[1:]
+                if rest and rest[0] in ("disk", "dvd", "floppy"):
+                    rest = rest[1:]
+                if len(rest) >= 2 and _is_raw_device_spelling(
+                        rest[-1]):
+                    return "raw disk write"
+        elif name in ("virt-sparsify", "virt-resize"):
+            # Value options per virt-sparsify / virt-resize --help
+            # (--format, --convert, --compress, --tmp,
+            # --check-tmpdir, --output-format, and virt-resize's
+            # --expand / --shrink / --resize / --delete / --add,
+            # which name a partition or a file), so their values
+            # are never mistaken for the output disk.
+            operands, _shorts, longs, _vals = _split_tool_args(
+                args, value_longs=frozenset(
+                    ("format", "convert", "compress", "tmp",
+                     "check-tmpdir", "output-format", "expand",
+                     "shrink", "resize", "resize-force",
+                     "unknown-filesystems", "lv-expand", "delete",
+                     "add")))
+            if not operands:
+                continue
+            if "in-place" in longs:
+                # --in-place rewrites the single operand in place.
+                if any(_is_raw_device_spelling(o) for o in operands):
+                    return "raw disk write"
+                continue
+            # indisk, then outdisk: only the outdisk is a write.
+            if len(operands) >= 2 and _is_image_target(operands[-1]):
+                return "raw disk write"
+    return None
+
+
 def _split_tool_args(args: list[str], value_shorts: frozenset | None = None,
                      value_longs: frozenset | None = None):
     """Split a tool's args into operands, flags, and option values.
@@ -2575,7 +2708,10 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     device (and ``curl``/``wget``/``rsync``/``scp`` output targets),
     archive tools writing their output archive onto one (``tar -cf``,
     ``zip``, ``7z a``, ``cpio -o -F``, ``mksquashfs``,
-    ``genisoimage -o``),
+    ``genisoimage -o``), and disk-image tools writing their output
+    image onto one (``qemu-img convert`` / ``create``,
+    ``VBoxManage convertfromraw`` / ``clonemedium``,
+    ``virt-sparsify`` / ``virt-resize``),
     ``shred``/``wipefs``/``blkdiscard`` aimed at one, and
     format / partition / volume tools aimed at one (``mke2fs``,
     ``mkswap``, ``fdisk``, ``parted``, ``sgdisk``, ``sfdisk``,
@@ -2715,6 +2851,7 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
             or _device_wipe_reason(tokens)
             or _format_device_reason(tokens)
             or _archive_device_reason(tokens)
+            or _image_device_reason(tokens)
             or _nested_reason(tokens, _depth))
 
 

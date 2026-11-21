@@ -1942,3 +1942,90 @@ def test_exec_blocklist_archive_device_targets(reg):
                 'genisoimage /tmp/foo',
                 'genisoimage -log-file /tmp/gen.log -o /tmp/x.iso /tmp/foo'):
         assert _is_dangerous(cmd) is None, cmd
+
+
+def test_exec_blocklist_image_device_targets(reg):
+    """Disk-image tools writing their output image onto a raw device.
+
+    ``qemu-img convert`` is the standard way to write a VM image onto
+    a physical disk, so ``qemu-img convert -O raw image.qcow2
+    /dev/sda`` streams the whole image onto the disk exactly like
+    ``dd`` to it — but no pattern or token check knew the image tools
+    at all (verified against ``_is_dangerous`` before this fix). The
+    same write spelled through the other image tools: ``qemu-img
+    create -f raw /dev/sda 10G`` (the image file is created on the
+    device), ``VBoxManage convertfromraw image.raw /dev/sda`` and
+    ``VBoxManage clonemedium disk image.vdi /dev/sda`` (the output
+    medium is the last operand), ``virt-sparsify image.qcow2
+    /dev/sda`` and ``virt-resize image.qcow2 /dev/sda`` (the output
+    disk is the last operand). Blocked cases go through exec (safe:
+    exec blocks them); allowed cases use the pure-function scan, since
+    running them would write the target. Precision is preserved:
+    every read form stays allowed — ``qemu-img info`` / ``check`` /
+    ``compare`` / ``map`` / ``measure``, ``VBoxManage
+    showmediuminfo`` — as does a device named as an input
+    (``qemu-img convert /dev/sda /tmp/x.img`` reads the disk into a
+    file, ``virt-sparsify /dev/sda /tmp/out.qcow2`` sparsifies it
+    into one), and a device spelling as another option's value
+    (``qemu-img convert -B /dev/sda`` names the backing file,
+    ``qemu-img create -b /dev/sda`` the same, ``virt-resize --expand
+    /dev/sda1`` the partition to grow). ``qemu-img resize`` only
+    shrinks with ``--shrink``, and ``virt-sparsify --in-place``
+    rewrites its single operand in place.
+    """
+    for cmd in ('qemu-img convert -O raw /tmp/x.qcow2 /dev/sda',
+                'qemu-img convert /tmp/x.qcow2 /dev/sda',
+                'qemu-img convert -f qcow2 -O raw -o preallocation=full /tmp/x.qcow2 /dev/sda',
+                'qemu-img convert -O raw /tmp/x.qcow2 /dev/nvme0n1',
+                'qemu-img convert -O raw /tmp/x.qcow2 /dev/disk/by-id/ata-XYZ',
+                'qemu-img convert -O raw /tmp/x.qcow2 /dev/mapper/vg-lv',
+                'qemu-img create -f raw /dev/sda 10G',
+                'qemu-img create /dev/sda 10G',
+                'qemu-img create -f qcow2 -o preallocation=metadata /dev/sda 10G',
+                'qemu-img resize --shrink /dev/sda 1G',
+                'qemu-img convert --target-image-opts /tmp/x.qcow2 driver=file,filename=/dev/sda',
+                'qemu-img convert --target-image-opts /tmp/x.qcow2 \'{"driver": "file", "filename": "/dev/sda"}\'',
+                'qemu-img create --image-opts driver=file,filename=/dev/sda 10G',
+                'VBoxManage convertfromraw /tmp/x.raw /dev/sda',
+                'VBoxManage convertfromraw /tmp/x.raw /dev/sda --format RAW',
+                'VBoxManage clonemedium disk /tmp/x.vdi /dev/sda',
+                'VBoxManage clonehd /tmp/x.vdi /dev/sda',
+                'VBoxManage clonemedium /tmp/x.vdi /dev/sda',
+                'VBoxManage clonemedium disk /tmp/x.vdi /dev/nvme0n1',
+                'virt-sparsify /tmp/x.qcow2 /dev/sda',
+                'virt-sparsify --format qcow2 /tmp/x.raw /dev/sda',
+                'virt-sparsify --in-place /dev/sda',
+                'virt-resize /tmp/x.img /dev/sda',
+                'virt-resize --expand /dev/sda1 /tmp/x.img /dev/sda',
+                'sudo qemu-img convert -O raw /tmp/x.qcow2 /dev/sda',
+                "bash -c 'qemu-img convert -O raw /tmp/x.qcow2 /dev/sda'",
+                'qemu-img convert -O raw /tmp/x.qcow2 /dev/sda; echo done'):
+        result = reg.get("exec").run(command=cmd)
+        assert isinstance(result, str), cmd
+        assert result.startswith("ERROR:") and "blocked" in result, cmd
+    from agentkai.tools import _is_dangerous
+    for cmd in ('qemu-img info /dev/sda',
+                'qemu-img check /dev/sda',
+                'qemu-img compare /tmp/a.qcow2 /dev/sda',
+                'qemu-img map /dev/sda',
+                'qemu-img measure /dev/sda',
+                'qemu-img convert -O raw /dev/sda /tmp/x.img',
+                'qemu-img convert -O raw /tmp/x.qcow2 /tmp/x.img',
+                'qemu-img convert -B /dev/sda -O raw /tmp/x.qcow2 /tmp/out.img',
+                'qemu-img create -f qcow2 /tmp/x.qcow2 10G',
+                'qemu-img create -b /dev/sda -f qcow2 /tmp/x.qcow2',
+                'qemu-img resize /dev/sda +1G',
+                'qemu-img resize /tmp/x.qcow2 1G',
+                'qemu-img resize --shrink /tmp/x.qcow2 1G',
+                'VBoxManage showmediuminfo disk /dev/sda',
+                'VBoxManage convertfromraw /dev/sda /tmp/x.raw',
+                'VBoxManage convertfromraw /tmp/x.raw /tmp/y.vdi',
+                'VBoxManage clonemedium disk /dev/sda /tmp/x.vdi',
+                'VBoxManage clonemedium disk /tmp/x.vdi /tmp/y.vdi',
+                'virt-sparsify /dev/sda /tmp/out.qcow2',
+                'virt-sparsify /tmp/x.qcow2 /tmp/out.qcow2',
+                'virt-sparsify --in-place /tmp/x.qcow2',
+                'virt-resize /dev/sda /tmp/out.img',
+                'virt-resize --expand /dev/sda1 /tmp/x.img /tmp/out.img',
+                'virt-resize /tmp/x.img /tmp/out.img'):
+        assert _is_dangerous(cmd) is None, cmd

@@ -3,6 +3,35 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.37] - 2026-11-21
+
+### Fixed
+- **Exec blocklist: disk-image tools writing their output image onto
+  a raw device slipped past unchecked.** `qemu-img convert -O raw
+  image.qcow2 /dev/sda` — the standard way to write a VM image onto
+  a physical disk — streams the whole image onto the disk exactly
+  like `dd` to it, and the same write spelled through the other
+  image tools — `qemu-img create -f raw /dev/sda 10G` (the image
+  file is created on the device), `VBoxManage convertfromraw
+  image.raw /dev/sda` and `VBoxManage clonemedium disk image.vdi
+  /dev/sda` (the output medium is the last operand),
+  `virt-sparsify image.qcow2 /dev/sda` and `virt-resize image.qcow2
+  /dev/sda` (the output disk is the last operand) — matched no
+  pattern or token check. Precision is preserved: every read form
+  stays allowed (`qemu-img info` / `check` / `compare` / `map` /
+  `measure`, `VBoxManage showmediuminfo`), as does a device named
+  as an input (`qemu-img convert /dev/sda /tmp/x.img` reads the
+  disk into a file) or as another option's value (`qemu-img
+  convert -B /dev/sda` names the backing file, `virt-resize
+  --expand /dev/sda1` the partition to grow), while `qemu-img
+  resize` blocks only with `--shrink` (without it a shrink is
+  refused) and `virt-sparsify --in-place` blocks on a raw-device
+  operand (it rewrites it in place); the `--image-opts` /
+  `--target-image-opts` spellings are covered too, both the
+  `filename=/dev/sda` form and the JSON `{"filename":
+  "/dev/sda"}` form. New test pins the blocked spellings (27
+  cases) and the allowed ones (24 cases).
+
 ## [0.6.36] - 2026-11-20
 
 ### Fixed
