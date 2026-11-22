@@ -1083,8 +1083,17 @@ def _split_shell_operators(tokens: list[str]) -> list[str]:
 # spelling — but the literal match above only knew ``sd``/``hd``/``vd``,
 # ``nvme``, ``mmcblk``, and ``mem``/``kmem``/``port``, so all of those
 # slipped past the copy and wipe checks (verified against
-# ``_is_dangerous`` before this fix). The stable symlinks under
-# ``/dev/disk/by-*/`` and the mapper nodes are covered separately in
+# ``_is_dangerous`` before this fix). The same gap held for the MTD
+# flash devices (``/dev/mtd0``, ``mtdblock0``, the UBI nodes
+# ``ubi0`` / ``ubi0_0`` / ``ubiblock0_0``), the s390 DASD disks
+# (``dasda``) and the Xen virtual disks (``xvda``): ``cp file
+# /dev/mtd0`` and ``tee /dev/xvda`` overwrote the flash / disk
+# exactly like ``cp`` to ``/dev/sda``, but matched no name in the
+# list. The read-only MTD nodes (``mtd0ro``) are deliberately not
+# matched: the ``$`` anchor leaves the ``ro`` suffix unmatched, so
+# a write aimed at one — which the device would refuse anyway —
+# stays allowed. The stable symlinks under ``/dev/disk/by-*/`` and
+# the mapper nodes are covered separately in
 # ``_is_raw_device_spelling``: their names are arbitrary, so no fixed
 # name list can enumerate them.
 _RAW_DEVICE = re.compile(
@@ -1097,6 +1106,12 @@ _RAW_DEVICE = re.compile(
     r"|ram[0-9]+"
     r"|nbd[0-9]+(?:p[0-9]+)?"
     r"|rbd[0-9]+(?:p[0-9]+)?"
+    r"|mtd[0-9]+"
+    r"|mtdblock[0-9]+"
+    r"|ubi[0-9]+(?:_[0-9]+)?"
+    r"|ubiblock[0-9]+(?:_[0-9]+)?"
+    r"|dasd[a-z]+[0-9]*"
+    r"|xvd[a-z]+[0-9]*"
     r"|mem|kmem|port)$")
 
 
@@ -1146,10 +1161,13 @@ def _raw_device_names() -> list[str]:
     ``p`` partition (1-3); ``mmcblk{0..3}`` likewise; ``dm-{0..3}``;
     ``loop{0..7}`` with an optional ``p`` partition (1-3); ``md{0..3}``;
     ``ram{0..3}``; ``nbd{0..3}`` / ``rbd{0..3}`` with an optional ``p``
-    partition (1-3). Built lazily and cached: a glob pattern is only
-    ever matched against this list, never against the live ``/dev`` —
-    the check must be deterministic in tests and must not depend on
-    which devices this machine happens to have.
+    partition (1-3); ``mtd{0..3}`` / ``mtdblock{0..3}``;
+    ``ubi{0..3}`` with its volumes (``ubi0_0`` ..) and
+    ``ubiblock{0..3}_0``; ``dasd{a..d}`` / ``xvd{a..d}`` with an
+    optional partition (1-3). Built lazily and cached: a glob pattern
+    is only ever matched against this list, never against the live
+    ``/dev`` — the check must be deterministic in tests and must not
+    depend on which devices this machine happens to have.
     """
     global _RAW_DEVICE_NAMES
     if _RAW_DEVICE_NAMES is None:
@@ -1183,6 +1201,18 @@ def _raw_device_names() -> list[str]:
             names.append(f"loop{i}")
             for part in range(1, 4):
                 names.append(f"loop{i}p{part}")
+        for i in range(4):
+            names.append(f"mtd{i}")
+            names.append(f"mtdblock{i}")
+            names.append(f"ubi{i}")
+            names.append(f"ubiblock{i}_0")
+            for vol in range(3):
+                names.append(f"ubi{i}_{vol}")
+        for base in ("dasda", "dasdb", "dasdc", "dasdd",
+                     "xvda", "xvdb", "xvdc", "xvdd"):
+            names.append(base)
+            for part in range(1, 4):
+                names.append(f"{base}{part}")
         _RAW_DEVICE_NAMES = names
     return _RAW_DEVICE_NAMES
 
@@ -1716,6 +1746,109 @@ def _image_device_reason(tokens: list[str]) -> str | None:
             # indisk, then outdisk: only the outdisk is a write.
             if len(operands) >= 2 and _is_image_target(operands[-1]):
                 return "raw disk write"
+    return None
+
+
+# An MTD flash device node, for the flash-tool check below: the
+# ``mtd`` / ``mtdblock`` / ``ubi`` / ``ubiblock`` alternatives of
+# ``_RAW_DEVICE``. Kept separate because the flash tools only ever
+# act on MTD devices — ``flash_erase /dev/sda`` is a certain failure
+# (the tool refuses a non-MTD device), not a footgun, so it stays
+# allowed while ``flash_erase /dev/mtd0`` blocks. The read-only
+# nodes (``mtd0ro``) are not matched, the same way ``_RAW_DEVICE``
+# leaves them unmatched, so a dump or erase aimed at one stays
+# allowed. Glob spellings are checked against the representative
+# names, the way ``_is_raw_device_spelling`` does.
+_MTD_DEVICE = re.compile(
+    r"^/dev/(?:mtd[0-9]+|mtdblock[0-9]+"
+    r"|ubi[0-9]+(?:_[0-9]+)?|ubiblock[0-9]+(?:_[0-9]+)?)$")
+
+
+def _is_mtd_device_spelling(tok: str) -> bool:
+    """True if *tok* names an MTD flash device (or UBI volume) node."""
+    mtd_names = [n for n in _raw_device_names()
+                 if n.startswith(("mtd", "ubi"))]
+    for expansion in _expand_braces(tok):
+        spell = _normalize_device_spelling(expansion)
+        if not spell:
+            continue
+        if _MTD_DEVICE.match(spell):
+            return True
+        segments = [s for s in spell.split("/") if s != ""]
+        if len(segments) == 2 and fnmatch.fnmatchcase("dev", segments[0]):
+            name = segments[1]
+            if _has_glob(name) and any(
+                    fnmatch.fnmatchcase(n, name) for n in mtd_names):
+                return True
+    return False
+
+
+def _mtd_device_reason(tokens: list[str]) -> str | None:
+    """MTD flash tools erasing or writing a flash device.
+
+    ``flash_erase /dev/mtd0 0 5`` erases the flash partition exactly
+    like ``shred`` on a disk — but no pattern or token check knew the
+    mtd-utils flash tools at all (verified against ``_is_dangerous``
+    before this fix). The same write spelled through the other flash
+    tools: ``flash_eraseall`` is the same tool under its old name;
+    ``nandwrite /dev/mtd0 image.bin`` writes the image onto the
+    device (the device is the first operand); ``flashcp image.bin
+    /dev/mtd0`` copies the file onto it (the device is the last
+    operand); ``ubiformat /dev/mtd0`` formats it for UBI (the device
+    is the first operand); ``mtd_debug erase`` / ``write`` erase or
+    write it (the subcommand is the first operand, the device the
+    second). Only the flash device counts, so every read form stays
+    allowed: ``nanddump`` dumps the device, ``mtdinfo`` /
+    ``flash_info`` describe it, and ``mtd_debug info`` / ``read``
+    read it — as does a device named only as another option's value
+    (``nandwrite -s`` is the start address, ``ubiformat -f`` the
+    image file, ``mtd_debug write``'s image file is its last
+    operand), and a non-MTD device (``flash_erase /dev/sda`` fails:
+    the tool refuses anything but an MTD device). Value options are
+    consumed so their values are never mistaken for the device
+    (``nandwrite -s``, ``ubiformat -f`` / ``-s`` / ``-O``).
+    """
+    for i, tok in enumerate(tokens):
+        name = _basename(tok)
+        args = _args_until_separator(tokens, i + 1)
+        if name in ("flash_erase", "flash_eraseall"):
+            # [options] <mtd-device> <start-block> <block-count>:
+            # the device is the first operand.
+            operands, _shorts, _longs, _vals = _split_tool_args(args)
+            if operands and _is_mtd_device_spelling(operands[0]):
+                return "flash erase"
+        elif name == "nandwrite":
+            # Value options per nandwrite --help (-s start address),
+            # so the address is never mistaken for the device.
+            # [options] <mtd-device> <input-file>: the device is the
+            # first operand.
+            operands, _shorts, _longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset("s"))
+            if operands and _is_mtd_device_spelling(operands[0]):
+                return "flash write"
+        elif name == "flashcp":
+            # [options] <filename> <mtd-device>: the device is the
+            # last operand.
+            operands, _shorts, _longs, _vals = _split_tool_args(args)
+            if operands and _is_mtd_device_spelling(operands[-1]):
+                return "flash write"
+        elif name == "ubiformat":
+            # Value options per ubiformat --help (-f image file, -s
+            # sub-page size, -O VID header offset), so their values
+            # are never mistaken for the device.
+            # [options] <mtd-device>: the device is the first operand.
+            operands, _shorts, _longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset("sfO"))
+            if operands and _is_mtd_device_spelling(operands[0]):
+                return "flash write"
+        elif name == "mtd_debug":
+            # <info|read|write|erase> <mtd-device> ...: only the
+            # write / erase subcommands touch the device.
+            operands, _shorts, _longs, _vals = _split_tool_args(args)
+            if len(operands) >= 2 and operands[0] in ("write", "erase") \
+                    and _is_mtd_device_spelling(operands[1]):
+                return ("flash erase" if operands[0] == "erase"
+                        else "flash write")
     return None
 
 
@@ -2606,7 +2739,14 @@ _CLIMB = (
 # ``rbd0``) and ``mmcblk`` — the ``mmcblk`` redirect slipped past
 # until now even though the copy / wipe checks already knew it
 # (verified against ``_is_dangerous`` before this fix); the tail
-# admits the hyphen in ``dm-0``. Kept at module level so the
+# admits the hyphen in ``dm-0``. The MTD flash devices (``mtd*`` /
+# ``mtdblock*`` / ``ubi*``), s390 DASD disks (``dasd*``) and Xen
+# virtual disks (``xvd*``) are covered the same way — a redirect
+# onto one overwrites the flash / disk exactly like ``> /dev/sda``.
+# The ``mtd`` branch consumes the digit run and asserts the next
+# character is not a letter or digit, so the read-only ``mtdNro``
+# nodes stay allowed the way ``mem`` / ``kmem`` / ``port`` keep
+# ``/dev/memory`` allowed. Kept at module level so the
 # brace-spelling re-check in ``_is_dangerous`` can reuse the same
 # patterns instead of duplicating them; the spelling rules are
 # explained where they are used, above the ``dd`` pattern.
@@ -2615,7 +2755,12 @@ _DEVICE_REDIRECT_PATTERNS = [
      + r"(s" + _Q + r"d|h" + _Q + r"d|n" + _Q + r"v" + _Q + r"m" + _Q
      + r"e|v" + _Q + r"d|d" + _Q + r"m|l" + _Q + r"o|m" + _Q + r"m"
      + _Q + r"c" + _Q + r"b" + _Q + r"l" + _Q + r"k|m" + _Q + r"d"
-     + r"|r" + _Q + r"a|r" + _Q + r"b|n" + _Q + r"b)(?:" + _Q
+     + r"|r" + _Q + r"a|r" + _Q + r"b|n" + _Q + r"b"
+     + r"|x" + _Q + r"v" + _Q + r"d|d" + _Q + r"a" + _Q + r"s" + _Q + r"d"
+     + r"|u" + _Q + r"b" + _Q + r"i"
+     + r"|m" + _Q + r"t" + _Q + r"d" + _Q + r"[0-9]+(?![a-z0-9])"
+     + r"|m" + _Q + r"t" + _Q + r"d" + _Q + r"b" + _Q + r"l" + _Q
+     + r"o" + _Q + r"c" + _Q + r"k)(?:" + _Q
      + r"[a-z0-9-])*",
      "raw disk write"),
     # The ``\b`` used to sit before the whole optional group, so it
@@ -2668,7 +2813,12 @@ _DEVICE_REDIRECT_PATTERNS = [
      + r"(s" + _Q + r"d|h" + _Q + r"d|n" + _Q + r"v" + _Q + r"m" + _Q
      + r"e|v" + _Q + r"d|d" + _Q + r"m|l" + _Q + r"o|m" + _Q + r"m"
      + _Q + r"c" + _Q + r"b" + _Q + r"l" + _Q + r"k|m" + _Q + r"d"
-     + r"|r" + _Q + r"a|r" + _Q + r"b|n" + _Q + r"b)(?:" + _Q
+     + r"|r" + _Q + r"a|r" + _Q + r"b|n" + _Q + r"b"
+     + r"|x" + _Q + r"v" + _Q + r"d|d" + _Q + r"a" + _Q + r"s" + _Q + r"d"
+     + r"|u" + _Q + r"b" + _Q + r"i"
+     + r"|m" + _Q + r"t" + _Q + r"d" + _Q + r"[0-9]+(?![a-z0-9])"
+     + r"|m" + _Q + r"t" + _Q + r"d" + _Q + r"b" + _Q + r"l" + _Q
+     + r"o" + _Q + r"c" + _Q + r"k)(?:" + _Q
      + r"[a-z0-9-])*"
      + r"|(m" + _Q + r"e" + _Q + r"m|k" + _Q + r"m" + _Q + r"e" + _Q
      + r"m|p" + _Q + r"o" + _Q + r"r" + _Q + r"t)" + _Q
@@ -2737,7 +2887,16 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     (copy mode) or shred target (``-2`` / ``-3`` / ``-4`` / ``-z`` /
     ``-Z``), each keeping its dry run / safety interlock
     (``sg_unmap`` / ``sg_write_buffer -d`` / ``--dry-run``,
-    bare ``sg_write_same``, ``dd_rescue`` to a regular file) — including
+    bare ``sg_write_same``, ``dd_rescue`` to a regular file) —
+    including MTD flash tools erasing or writing a flash device
+    (``flash_erase`` / ``flash_eraseall``, ``nandwrite``,
+    ``flashcp``, ``ubiformat``, ``mtd_debug write`` / ``erase``),
+    each keeping its read-only form (``nanddump``, ``mtdinfo``,
+    ``flash_info``, ``mtd_debug info`` / ``read``, the read-only
+    ``mtdNro`` nodes) — and the MTD flash devices (``/dev/mtd*`` /
+    ``mtdblock*`` / ``ubi*``), s390 DASD disks (``/dev/dasd*``)
+    and Xen virtual disks (``/dev/xvd*``) as raw-device spellings
+    in the copy / wipe / redirect checks — including
     dot-segment /
     doubled-slash spellings of the device
     (``/dev/./sda``, ``//dev/sda``), ``>|`` redirects to one, quoted
@@ -2852,6 +3011,7 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
             or _format_device_reason(tokens)
             or _archive_device_reason(tokens)
             or _image_device_reason(tokens)
+            or _mtd_device_reason(tokens)
             or _nested_reason(tokens, _depth))
 
 

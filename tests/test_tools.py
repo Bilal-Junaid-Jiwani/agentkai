@@ -2029,3 +2029,99 @@ def test_exec_blocklist_image_device_targets(reg):
                 'virt-resize --expand /dev/sda1 /tmp/x.img /tmp/out.img',
                 'virt-resize /tmp/x.img /tmp/out.img'):
         assert _is_dangerous(cmd) is None, cmd
+
+def test_exec_blocklist_mtd_flash_device_targets(reg):
+    """MTD flash tools erasing or writing a flash device, and the
+    flash / DASD / Xen device names as copy / redirect targets.
+
+    ``flash_erase /dev/mtd0 0 5`` erases the flash partition exactly
+    like ``shred`` on a disk — but no pattern or token check knew
+    the mtd-utils flash tools at all (verified against
+    ``_is_dangerous`` before this fix). The same write spelled
+    through the other flash tools: ``flash_eraseall`` is the same
+    tool under its old name; ``nandwrite /dev/mtd0 image.bin``
+    writes the image onto the device (the device is the first
+    operand); ``flashcp image.bin /dev/mtd0`` copies the file onto
+    it (the device is the last operand); ``ubiformat /dev/mtd0``
+    formats it for UBI (the device is the first operand);
+    ``mtd_debug erase`` / ``write`` erase or write it (the
+    subcommand is the first operand, the device the second). The
+    device names themselves were unknown too: ``cp file /dev/mtd0``,
+    ``tee /dev/xvda`` and ``cat file > /dev/dasda`` overwrote the
+    flash / disk exactly like a copy to ``/dev/sda``, but
+    ``/dev/mtd*`` / ``mtdblock*`` / ``ubi*``, ``dasd*`` (s390) and
+    ``xvd*`` (Xen) matched no name in the copy / wipe / redirect
+    checks. Blocked cases go through exec (safe: exec blocks them);
+    allowed cases use the pure-function scan, since running them
+    would write the target. Precision is preserved: every read form
+    stays allowed — ``nanddump``, ``mtdinfo`` / ``flash_info``,
+    ``mtd_debug info`` / ``read`` — as does a device named only as
+    another option's value (``nandwrite -s`` is the start address,
+    ``ubiformat -f`` the image file), a non-MTD device
+    (``flash_erase /dev/sda`` fails: the tool refuses anything but
+    an MTD device), a swapped operand order (``nandwrite``'s device
+    is its first operand, ``flashcp``'s its last), and the read-only
+    ``mtdNro`` nodes (``cp file /dev/mtd0ro``, ``> /dev/mtd0ro``).
+    """
+    for cmd in ('flash_erase /dev/mtd0 0 5',
+                'flash_erase -j /dev/mtd0 0 5',
+                'flash_eraseall /dev/mtd0 0 5',
+                'flash_erase /dev/mtdblock0 0 5',
+                'flash_erase /dev/mtd[0-9] 0 5',
+                'flash_erase /dev/mtd0 0 5; echo done',
+                "bash -c 'flash_erase /dev/mtd0 0 5'",
+                'sudo flash_erase /dev/mtd0 0 5',
+                '/usr/sbin/flash_erase /dev/mtd0 0 5',
+                'nandwrite /dev/mtd0 /tmp/f.bin',
+                'nandwrite -p /dev/mtd0 /tmp/f.bin',
+                'nandwrite -s 0x1000 /dev/mtd0 /tmp/f.bin',
+                'flashcp /tmp/f.bin /dev/mtd0',
+                'flashcp -v /tmp/f.bin /dev/mtd0',
+                'ubiformat /dev/mtd0',
+                'ubiformat -y /dev/mtd0',
+                'ubiformat /dev/mtd0 -f /tmp/rootfs.ubi',
+                'mtd_debug erase /dev/mtd0 0 100',
+                'mtd_debug write /dev/mtd0 0 100 /tmp/f.bin',
+                'cp /tmp/f /dev/mtd0',
+                'cp /tmp/f /dev/mtdblock0',
+                'cp /tmp/f /dev/ubi0',
+                'cp /tmp/f /dev/ubi0_0',
+                'cp /tmp/f /dev/ubiblock0_0',
+                'cp /tmp/f /dev/xvda',
+                'cp /tmp/f /dev/dasda',
+                'cp /tmp/f /dev/mtd[0-9]',
+                'cp /tmp/f /dev/{mtd0,mtd1}',
+                'tee /dev/mtd0 < /tmp/f',
+                'tee /dev/xvda < /tmp/f',
+                'cat /tmp/f > /dev/mtd0',
+                'cat /tmp/f > /dev/xvda',
+                'cat /tmp/f > /dev/dasda',
+                'cat /tmp/f > /dev/ubi0',
+                'shred /dev/mtd0',
+                'wipefs -a /dev/xvda'):
+        result = reg.get("exec").run(command=cmd)
+        assert isinstance(result, str), cmd
+        assert result.startswith("ERROR:") and "blocked" in result, cmd
+    from agentkai.tools import _is_dangerous
+    for cmd in ('nanddump /dev/mtd0',
+                'nanddump /dev/mtd0ro',
+                'mtdinfo /dev/mtd0',
+                'flash_info /dev/mtd0',
+                'mtd_debug info /dev/mtd0',
+                'mtd_debug read /dev/mtd0 0 100 /tmp/out',
+                'flash_erase --help',
+                'nandwrite --help',
+                'flashcp --help',
+                'ubiformat --help',
+                'flash_erase /dev/mtd0ro 0 5',
+                'nandwrite /dev/mtd0ro /tmp/f.bin',
+                'flash_erase /dev/sda 0 5',
+                'nandwrite /tmp/f.bin /dev/mtd0',
+                'flashcp /dev/mtd0 /tmp/f.bin',
+                'ubiformat -f /dev/mtd0',
+                'cp /dev/mtd0 /tmp/backup',
+                'cp /tmp/f /dev/mtd0ro',
+                'cat /tmp/f > /dev/mtd0ro',
+                'mtd_debug erase /tmp/x 0 100',
+                'flash_erase /dev/mtd[0-9]ro 0 5'):
+        assert _is_dangerous(cmd) is None, cmd

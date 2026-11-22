@@ -3,6 +3,35 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.38] - 2026-11-22
+
+### Fixed
+- **Exec blocklist: MTD flash tools erasing or writing a flash
+  device slipped past unchecked.** `flash_erase /dev/mtd0 0 5` —
+  the standard way to erase a flash partition — wipes the partition
+  exactly like `shred` on a disk, and the same write spelled
+  through the other mtd-utils flash tools — `flash_eraseall` (the
+  same tool under its old name), `nandwrite /dev/mtd0 image.bin`
+  (the device is the first operand), `flashcp image.bin /dev/mtd0`
+  (the device is the last operand), `ubiformat /dev/mtd0` (the
+  device is the first operand), `mtd_debug erase` / `write`
+  (the subcommand is the first operand, the device the second) —
+  matched no pattern or token check. The device names themselves
+  were unknown too: `cp file /dev/mtd0`, `tee /dev/xvda` and `cat
+  file > /dev/dasda` overwrote the flash / disk exactly like a copy
+  to `/dev/sda`, but `/dev/mtd*` / `mtdblock*` / `ubi*` (and UBI
+  volumes), `dasd*` (s390) and `xvd*` (Xen) matched no name in the
+  copy / wipe / redirect checks. Precision is preserved: every read
+  form stays allowed (`nanddump`, `mtdinfo` / `flash_info`,
+  `mtd_debug info` / `read`), as does a device named only as
+  another option's value (`nandwrite -s` is the start address,
+  `ubiformat -f` the image file), a non-MTD device
+  (`flash_erase /dev/sda` fails: the tool refuses anything but an
+  MTD device), a swapped operand order (`nandwrite`'s device is its
+  first operand, `flashcp`'s its last), and the read-only `mtdNro`
+  nodes (`cp file /dev/mtd0ro`, `> /dev/mtd0ro`). New test pins the
+  blocked spellings (36 cases) and the allowed ones (21 cases).
+
 ## [0.6.37] - 2026-11-21
 
 ### Fixed
