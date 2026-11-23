@@ -125,6 +125,9 @@ def _parse_cron_field(field: str, lo: int, hi: int) -> set[int]:
 
 def parse_cron(schedule: str) -> tuple[set[int], ...]:
     """Parse a 5-field cron expression into five value sets."""
+    if not isinstance(schedule, str):
+        raise ValueError(
+            f"schedule must be a string, got {type(schedule).__name__}")
     fields = schedule.split()
     if len(fields) != 5:
         raise ValueError(
@@ -201,6 +204,9 @@ def cron_next(schedule: str, after: datetime) -> datetime:
 
 def parse_at(schedule: str) -> datetime:
     """Parse an ``@at:<ISO datetime>`` one-shot schedule."""
+    if not isinstance(schedule, str):
+        raise ValueError(
+            f"schedule must be a string, got {type(schedule).__name__}")
     if not schedule.startswith("@at:"):
         raise ValueError(f"not a one-shot schedule: {schedule!r}")
     dt = datetime.fromisoformat(schedule[len("@at:"):])
@@ -218,6 +224,9 @@ def validate_schedule(schedule: str) -> None:
     dates: ``"0 0 31 2 *"`` parses fine, but no February ever has a
     31st, so the job would sit in the store forever and never run.
     """
+    if not isinstance(schedule, str):
+        raise ValueError(
+            f"schedule must be a string, got {type(schedule).__name__}")
     if not schedule or not schedule.strip():
         raise ValueError("schedule is empty")
     if schedule.startswith("@at:"):
@@ -388,8 +397,29 @@ class Scheduler:
 
     # -- CRUD ------------------------------------------------------------
 
+    @staticmethod
+    def _command_block_reason(command: str | None) -> str | None:
+        """The exec blocklist's verdict on a legacy shell job's command.
+
+        Legacy shell jobs run unattended via ``shell=True`` — outside
+        the agent loop, so no permission prompt ever sees them. The
+        blocklist is therefore applied here, at add time and again at
+        run time (a job stored before this check existed, or written
+        to the store directly, is still refused). Imported lazily:
+        ``agentkai.tools`` is heavy, and the scheduler is imported by
+        the CLI for pure schedule validation too.
+        """
+        if not command:
+            return None
+        from agentkai.tools import _is_dangerous
+        return _is_dangerous(command)
+
     def add(self, job: Job) -> None:
         validate_schedule(job.schedule)
+        reason = self._command_block_reason(job.command)
+        if reason is not None:
+            raise ValueError(
+                f"job command refused by the safety blocklist: {reason}")
         with self._lock:
             self.conn.execute(
                 "INSERT OR REPLACE INTO jobs "
@@ -439,6 +469,10 @@ class Scheduler:
             (name,)).fetchone()
         if not row or not row["command"]:
             return {"error": f"no enabled shell job named {name}"}
+        reason = self._command_block_reason(row["command"])
+        if reason is not None:
+            return {"error": "job command refused by the safety "
+                             f"blocklist: {reason}"}
         p = subprocess.run(row["command"], shell=True, capture_output=True,
                            text=True, timeout=600)
         self._stamp(name)

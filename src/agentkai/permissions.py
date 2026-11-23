@@ -67,13 +67,33 @@ class Action:
         return {"tool": self.tool, "args": self.args, "risk": self.risk}
 
     def describe(self) -> str:
-        arg_bits = ", ".join(f"{k}={_short(v)}" for k, v in self.args.items())
+        arg_bits = ", ".join(
+            f"{k}={_describe_value(k, v)}" for k, v in self.args.items())
         return f"{self.tool}({arg_bits}) [risk={self.risk}]"
 
 
 def _short(v, n: int = 60) -> str:
     s = str(v).replace("\n", " ")
     return s if len(s) <= n else s[:n] + "…"
+
+
+# The ``command`` argument of an exec action is the thing being
+# approved; truncating it at 60 characters silently hid everything
+# after the first innocuous-looking words (``echo starting the
+# harmless backup step now; rm -rf /`` rendered as a backup step).
+# Commands render in full up to this cap; past it the truncation is
+# explicit, with the total length stated, so the approver knows
+# there is more than they can see.
+_COMMAND_DISPLAY_CAP = 500
+
+
+def _describe_value(key: str, v) -> str:
+    if key != "command":
+        return _short(v)
+    s = str(v).replace("\n", " ")
+    if len(s) <= _COMMAND_DISPLAY_CAP:
+        return s
+    return s[:_COMMAND_DISPLAY_CAP] + f"… ({len(s)} chars total)"
 
 
 def cli_ask(action: Action) -> bool:

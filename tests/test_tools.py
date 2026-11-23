@@ -2214,3 +2214,319 @@ def test_exec_blocklist_ubi_volume_tools(reg):
                 'ubirmvol /dev/mtd0 -N rootfs',
                 'ubimkvol /dev/mtd0 -N data -s 10MiB'):
         assert _is_dangerous(cmd) is None, cmd
+
+
+# ---- 0.6.40 security-audit round (AK-01…AK-13) ------------------------------
+# Every blocked spelling below is quoted from the audit report; each
+# was verified ALLOWED against the pre-fix checker by calling
+# _is_dangerous directly (pure-function verdicts only — none of
+# these strings is ever executed). The allowed lists are the benign
+# controls that must keep working.
+
+
+def test_blocklist_fail_open_on_unparseable_command():
+    """AK-01: ``rm -rf / # don't`` — the apostrophe inside the
+    comment made shlex raise, and the checker treated 'cannot parse'
+    as 'safe', skipping every token-stage check. A parse failure now
+    falls back to raw-string checks and fails closed."""
+    from agentkai.tools import _is_dangerous
+    for cmd in ("rm -rf / # don't",
+                "dd if=/dev/zero of=/dev/sda # don't"):
+        assert _is_dangerous(cmd) is not None, cmd
+    # The same apostrophe on a benign command stays allowed.
+    assert _is_dangerous("ls # don't") is None
+
+
+def test_blocklist_rm_capital_R_is_recursive():
+    """AK-05: -R counts as recursive, exactly like -r."""
+    from agentkai.tools import _is_dangerous
+    for cmd in ("rm -Rf /", "rm -R -f /"):
+        assert _is_dangerous(cmd) is not None, cmd
+
+
+def test_blocklist_system_dirs_are_guarded():
+    """The rm guard derived its protected set from passwd homes
+    alone, so ``rm -rf /etc`` (no account has /etc as a home) was
+    allowed. The system trees are guarded roots now — deleting the
+    tree itself is refused, subdirectories stay ordinary targets."""
+    from agentkai.tools import _is_dangerous
+    for cmd in ("rm -rf /etc", "rm -rf /usr", "rm -rf /var",
+                "rm -rf /opt", "rm -rf /boot", "rm -rf /sys",
+                "rm -rf /proc", "rm -rf /root", "rm -rf /srv"):
+        assert _is_dangerous(cmd) is not None, cmd
+    for cmd in ("rm -rf /etc/myapp/cache", "rm -rf /var/tmp/scratch",
+                "rm -rf /opt/myapp/build", "rm -rf /home/shared",
+                "rm -rf /tmp/scratch-dir", "rm -rf /tmp/myproject/build",
+                "rm -rf ./build", "rm -rf build"):
+        assert _is_dangerous(cmd) is None, cmd
+
+
+def test_blocklist_variable_indirection():
+    """AK-04: expansions are priced before the verb checks — a
+    same-command assignment resolves, ``${VAR:-default}`` is
+    evaluated, $USER/$LOGNAME name the current account's home, and a
+    recursive forced delete of one bare unresolved variable is
+    refused outright."""
+    from agentkai.tools import _is_dangerous
+    for cmd in ("T=/; rm -rf $T",
+                "rm -rf ${D:-/}",
+                "rm -rf /home/$USER",
+                "rm -rf /home/$LOGNAME",
+                "find /home/$USER -delete",
+                "rm${IFS}-rf${IFS}/"):
+        assert _is_dangerous(cmd) is not None, cmd
+
+
+def test_blocklist_xargs_feeding_destructive_verbs():
+    """AK-04: xargs builds the destructive command from stdin, so
+    the rm/dd behind it is priced like a direct invocation."""
+    from agentkai.tools import _is_dangerous
+    for cmd in ("echo / | xargs rm -rf",
+                "printf '/dev/sda' | xargs -I{} dd if=/dev/zero of={}"):
+        assert _is_dangerous(cmd) is not None, cmd
+    assert _is_dangerous("xargs ls < /tmp/list") is None
+    assert _is_dangerous("echo hello | xargs echo") is None
+
+
+def test_blocklist_interpreter_inline_code():
+    """AK-02: interpreter one-liners run code the shell-level checks
+    cannot see; the code argument is scanned for the destructive
+    vocabulary, and an ssh remote command is rescanned as a
+    command."""
+    from agentkai.tools import _is_dangerous
+    for cmd in ("python3 -c 'import shutil; shutil.rmtree(\"/\")'",
+                "python3 -c 'import os; os.system(\"rm -rf /\")'",
+                "python3 -c 'open(\"/dev/sda\",\"wb\").write(b\"x\")'",
+                "perl -e 'system(\"rm -rf /\")'",
+                "ruby -e 'system(\"rm -rf /\")'",
+                "node -e 'require(\"child_process\").execSync(\"rm -rf /\")'",
+                "php -r 'system(\"rm -rf /\");'",
+                "awk 'BEGIN{system(\"rm -rf /\")}'",
+                "ssh localhost 'rm -rf /'"):
+        assert _is_dangerous(cmd) is not None, cmd
+    for cmd in ("python3 -c 'print(1)'",
+                "python3 -c 'import os; print(os.getcwd())'",
+                "perl -e 'print 1'",
+                "node -e 'console.log(1)'",
+                "awk '{print $1}' file.txt",
+                "ssh localhost 'ls -la'",
+                "python3 script.py",
+                "python -m pytest tests/",
+                "pip install requests"):
+        assert _is_dangerous(cmd) is None, cmd
+
+
+def test_blocklist_pipes_into_shells_and_schedulers():
+    """AK-03: a pipe into a shell executes whatever arrives, from
+    any source — not just curl/wget downloads; a pipe into at or a
+    stdin-installed crontab persists it."""
+    from agentkai.tools import _is_dangerous
+    for cmd in ("echo 'rm -rf /' | bash",
+                "echo cm0gLXJmIC8= | base64 -d | bash",
+                "echo 'rm -rf /' | sh",
+                "echo 'rm -rf /' | at now",
+                "echo '* * * * * rm -rf /' | crontab -"):
+        assert _is_dangerous(cmd) is not None, cmd
+    for cmd in ("echo hello | grep h",
+                "echo hello | sha256sum",
+                "ls -la /tmp",
+                "crontab -l"):
+        assert _is_dangerous(cmd) is None, cmd
+
+
+def test_blocklist_script_files_are_scanned(tmp_path):
+    """AK-03: a script file a shell is asked to run is priced on its
+    contents before it runs (files are read, never executed, by the
+    checker). A missing file cannot run and stays the shell's own
+    error."""
+    from agentkai.tools import _is_dangerous
+    evil = tmp_path / "evil.sh"
+    evil.write_text("rm -rf /\n")
+    good = tmp_path / "good.sh"
+    good.write_text("echo hello\n")
+    assert _is_dangerous(f"bash {evil}") is not None
+    assert _is_dangerous(f"source {evil}") is not None
+    assert _is_dangerous(f"bash -s < {evil}") is not None
+    assert _is_dangerous(f"bash {good}") is None
+    assert _is_dangerous(f"bash {tmp_path / 'missing.sh'}") is None
+
+
+def test_blocklist_symlink_targets_are_resolved(tmp_path):
+    """AK-06: dd/rm targets spelled through a symlink are priced by
+    the path they resolve to (realpath is metadata-only)."""
+    from pathlib import Path
+
+    from agentkai.tools import _is_dangerous
+    disk_link = tmp_path / "disklink"
+    disk_link.symlink_to("/dev/sda")
+    assert _is_dangerous(f"dd if=/dev/zero of={disk_link}") is not None
+    home_link = tmp_path / "homelink"
+    home_link.symlink_to(Path.home())
+    assert _is_dangerous(f"rm -rf {home_link}/") is not None
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    scratch_link = tmp_path / "scratchlink"
+    scratch_link.symlink_to(scratch)
+    assert _is_dangerous(f"rm -rf {scratch_link}/") is None
+
+
+def test_blocklist_dd_split_across_lines():
+    """AK-09: a backslash-newline continuation used to defeat the
+    single-line dd pattern; continuations are normalized first, and
+    dd has a token-stage check of its own."""
+    from agentkai.tools import _is_dangerous
+    assert _is_dangerous("dd if=/dev/zero \\\nof=/dev/sda") is not None
+    # Reading a disk into a file stays the legitimate direction.
+    assert _is_dangerous("dd if=/dev/sda of=/tmp/backup.img") is None
+    assert _is_dangerous("tar -cf /tmp/x.tar /dev/sda") is None
+
+
+def test_blocklist_newly_covered_device_tools():
+    """AK-10: the NVMe write family, sg_sanitize, fio device
+    writes, fallocate discard modes on a device, and scrub on a
+    device."""
+    from agentkai.tools import _is_dangerous
+    for cmd in ("nvme write-zeroes /dev/nvme0n1",
+                "nvme dsm /dev/nvme0n1 --ad",
+                "nvme write /dev/nvme0n1 --data=/tmp/x",
+                "sg_sanitize --block /dev/sda",
+                "sg_sanitize --crypto /dev/sg0",
+                "fio --filename=/dev/sda --rw=write",
+                "fio --filename=/dev/sda --rw=randtrim",
+                "fallocate --zero-range /dev/sda",
+                "fallocate --punch-hole /dev/sda",
+                "scrub /dev/sda"):
+        assert _is_dangerous(cmd) is not None, cmd
+    for cmd in ("nvme list",
+                "nvme verify /dev/nvme0n1",
+                "nvme dsm /dev/nvme0n1 --slba=0 --nlb=100",
+                "fio --filename=/dev/sda --rw=read",
+                "fio --filename=/tmp/fiofile --rw=write",
+                "fallocate --zero-range --length 1G /tmp/file",
+                "fallocate -l 1G /tmp/file",
+                "scrub /tmp/file",
+                "badblocks /dev/sda",
+                "sg_dd if=/dev/sda of=/tmp/x",
+                "lvresize -L +1G"):
+        assert _is_dangerous(cmd) is None, cmd
+
+
+def test_blocklist_availability_spellings():
+    """AK-11: SysRq writes, init/telinit power runlevels, kill of
+    PID 1, and fork bombs under any function name."""
+    from agentkai.tools import _is_dangerous
+    for cmd in ("echo b > /proc/sysrq-trigger",
+                "echo b | sudo tee /proc/sysrq-trigger",
+                "init 6",
+                "telinit 0",
+                "kill -9 1",
+                "x(){ x|x& }; x"):
+        assert _is_dangerous(cmd) is not None, cmd
+    for cmd in ("kill -9 1234",
+                "init --help",
+                "echo b > /tmp/sysrq-trigger",
+                "walk(){ walk \"$1\"; }"):
+        assert _is_dangerous(cmd) is None, cmd
+
+
+def test_fetch_url_pins_the_validated_address(tmp_path, monkeypatch):
+    """AK-13: the socket dials the address the SSRF guard validated
+    — DNS gets no second, different answer at connect time. The
+    resolver is stubbed to the loopback test server; no external
+    network is touched."""
+    import http.server
+    import socket
+    import threading
+
+    import agentkai.tools as tools_mod
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = b"pinned fetch ok"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    for var in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY",
+                "all_proxy", "ALL_PROXY"):
+        monkeypatch.delenv(var, raising=False)
+    dialed = []
+    real_create = socket.create_connection
+
+    def recording_create(address, *args, **kwargs):
+        dialed.append(address)
+        return real_create(address, *args, **kwargs)
+
+    monkeypatch.setattr(tools_mod, "_resolve_public_ips",
+                        lambda host: ["127.0.0.1"])
+    monkeypatch.setattr(socket, "create_connection", recording_create)
+    try:
+        result = tools_mod._fetch_url(f"http://example.test:{port}/page")
+    finally:
+        server.shutdown()
+    assert isinstance(result, dict), result
+    assert result["text"] == "pinned fetch ok"
+    assert dialed and dialed[0] == ("127.0.0.1", port)
+
+
+def test_fetch_https_pins_ip_but_verifies_the_hostname(monkeypatch):
+    """AK-13: the HTTPS connection dials the pinned address while
+    TLS SNI / certificate verification still use the real hostname."""
+    import socket
+
+    import agentkai.tools as tools_mod
+
+    seen = {}
+
+    class FakeSock:
+        def setsockopt(self, *args):
+            pass
+
+    def fake_create(address, *args, **kwargs):
+        seen["address"] = address
+        return FakeSock()
+
+    class FakeContext:
+        def wrap_socket(self, sock, server_hostname=None):
+            seen["server_hostname"] = server_hostname
+            return sock
+
+    monkeypatch.setattr(socket, "create_connection", fake_create)
+    conn = tools_mod._PinnedHTTPSConnection(
+        "example.com", 443, context=FakeContext(),
+        _pinned_ip="93.184.216.34")
+    conn.connect()
+    assert seen["address"] == ("93.184.216.34", 443)
+    assert seen["server_hostname"] == "example.com"
+
+
+def test_fetch_url_refuses_rebinding_at_connect_time(monkeypatch):
+    """AK-13: if the connect-time resolution turns non-public (the
+    rebinding move), the fetch is refused with the guard's message
+    instead of connecting."""
+    import agentkai.tools as tools_mod
+
+    calls = {"n": 0}
+
+    def flaky_resolver(host):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return ["93.184.216.34"]
+        raise ValueError(
+            f"Refusing non-public address for {host!r} (10.0.0.1)")
+
+    for var in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY",
+                "all_proxy", "ALL_PROXY"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr(tools_mod, "_resolve_public_ips", flaky_resolver)
+    result = tools_mod._fetch_url("http://example.com/")
+    assert isinstance(result, str) and result.startswith("ERROR:")
+    assert "Refusing non-public address" in result

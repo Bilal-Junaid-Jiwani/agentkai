@@ -486,3 +486,41 @@ def test_cli_scheduler_add_needs_prompt_or_command(tmp_path, monkeypatch):
     r = runner.invoke(cli_mod.app, ["scheduler", "add", "bad",
                                    "--schedule", "* * * * *"])
     assert r.exit_code == 2
+
+
+def test_scheduler_rejects_blocklisted_shell_jobs(tmp_path):
+    """AK-12: legacy shell jobs run unattended via shell=True and
+    never pass the exec tool's gate, so the blocklist is enforced by
+    the scheduler itself — at add time, and again at run time for
+    jobs that reached the store any other way."""
+    s = Scheduler(db=tmp_path / "sched.db")
+    with pytest.raises(ValueError, match="blocklist"):
+        s.add(Job(name="evil", schedule="0 2 * * *", command="rm -rf /"))
+    assert s.get("evil") is None
+    s.add(Job(name="ok", schedule="0 2 * * *", command="echo hi"))
+    # A blocked job inserted straight into the store (as a pre-fix
+    # store would hold) is refused by run_once without executing.
+    s.conn.execute(
+        "INSERT OR REPLACE INTO jobs (name, schedule, command, prompt,"
+        " model_alias, job_type, enabled, last_run, created_ts) VALUES"
+        " ('stored', '0 2 * * *', 'rm -rf /', '', 'claude', 'cron', 1,"
+        " '', '')")
+    s.conn.commit()
+    called = []
+    import agentkai.scheduler as sched_mod
+    orig_run = sched_mod.subprocess.run
+    sched_mod.subprocess.run = lambda *a, **k: called.append(a)
+    try:
+        out = s.run_once("stored")
+    finally:
+        sched_mod.subprocess.run = orig_run
+    assert "blocklist" in out.get("error", "")
+    assert called == []
+
+
+def test_validate_schedule_rejects_non_string():
+    """validate_schedule(42) raised AttributeError; the contract is
+    ValueError for anything that is not a runnable schedule."""
+    for bad in (42, None, 3.5, ["0 2 * * *"]):
+        with pytest.raises(ValueError):
+            validate_schedule(bad)

@@ -3,6 +3,109 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.40] - 2026-11-23
+
+### Fixed
+- **Security audit round: the exec blocklist failed open and whole
+  destructive classes slipped past it.** A full audit of the safety
+  surface (findings AK-01…AK-13) found that in `--auto-approve`
+  mode — where the blocklist is the only control between a
+  prompt-injected command and the shell — the checker could be
+  bypassed by spelling, not by novelty. Every bypass below was
+  reproduced against the old checker with pure-function verdict
+  calls before the fix, and each is pinned by a new regression
+  test; benign controls (`ls -la /tmp`, project-directory deletes,
+  `python3 -c 'print(1)'`, pipes into grep/sha256sum, disk reads)
+  are pinned too, and the full suite is green.
+- **Fail-open on unparseable commands (AK-01).** `rm -rf / #
+  don't` — an apostrophe inside a comment — made the tokenizer
+  raise, and the checker read "cannot parse" as "safe", skipping
+  every token-stage check. Tokenization now retries with comments
+  enabled and, failing that, falls back to raw-string checks for
+  the destructive families: a parse failure with a destructive
+  spelling is refused, never waved through.
+- **Interpreter one-liners ran unchecked code (AK-02).**
+  `python3 -c`, `perl -e`, `ruby -e`, `node -e`, `php -r` and
+  `lua -e` payloads are now scanned for the destructive vocabulary
+  (rmtree / os.remove / os.system / subprocess / shutil /
+  child_process, raw-device names, and shell spellings inside
+  their string literals, which are rescanned as commands); awk
+  programs using `system(` are refused; and an `ssh host 'cmd'`
+  remote command is rescanned as a command.
+- **Pipes and script files (AK-03).** Only curl/wget pipes into a
+  shell were blocked; now any pipe into a shell, into `at`, or
+  into a stdin-installed crontab is refused. A script file a shell
+  is asked to run (including `source` files and `shell -s` with a
+  file redirect) is scanned before it runs — a destructive script
+  is refused, a benign one runs, and a missing file stays the
+  shell's own error.
+- **Variable indirection (AK-04).** Same-command assignments
+  (`T=/; rm -rf $T`), `${VAR:-default}` expansions, and
+  `$USER`/`$LOGNAME` path components are priced before the verb
+  checks; a recursive forced delete of one bare unresolved
+  variable is refused; `xargs` feeding a recursive `rm` or a
+  device `dd` is refused.
+- **rm spelling gaps (AK-05) and guarded roots.** `-R` now counts
+  as recursive like `-r`, and the guarded set names the system
+  trees (`/etc`, `/usr`, `/var`, `/opt`, `/srv`, `/boot`, `/bin`,
+  `/sbin`, `/lib`, `/lib64`, `/sys`, `/proc`, `/dev`, `/root`)
+  instead of deriving protection from passwd homes alone, so
+  `rm -rf /etc` is refused. Precision is preserved: subdirectories
+  (`/etc/myapp/cache`, `/var/tmp/scratch`, project dirs) stay
+  allowed, following the existing guard semantics.
+- **Symlink targets (AK-06).** `dd of=`, `rm`, copy/wipe and
+  `find` targets that exist on disk are resolved with `realpath`
+  (metadata only) and re-priced, so a symlink to `/dev/sda` or to
+  the home directory is refused like the direct spelling.
+- **Split commands (AK-09).** Backslash-newline continuations and
+  `$IFS`/`${IFS}` are normalized before any check, and `dd` has a
+  token-stage check, so a `dd` split across lines is priced like
+  the joined command.
+- **Newly covered device tools (AK-10).** The NVMe write family
+  (`write`, `write-zeroes`, `write-uncorrectable`, `dsm --ad`,
+  `delete-ns`; `format` was already covered), `sg_sanitize`, `fio`
+  writes to a block device, `fallocate --zero-range` /
+  `--punch-hole` / `--collapse-range` on a device, and `scrub` on
+  a device. Read forms (`nvme verify`, `nvme dsm` without `--ad`,
+  fio read modes, file targets) stay allowed.
+- **Availability spellings (AK-11).** Writes to
+  `/proc/sysrq-trigger` (redirect, `tee`, copy destinations),
+  `init`/`telinit` runlevels 0 and 6, `kill` of PID 1, and fork
+  bombs under any function name are refused.
+- **WebChat shipped defaults were wildcard (AK-07).** The webchat
+  channel defaulted to `allowlist: ["*"]` with `owner_peer:
+  "local"`, and its peer id is self-asserted — any local process,
+  or any web page open in the user's browser, could impersonate
+  the owner and answer its own approval requests. The shipped
+  defaults are now default-deny (`allowlist: []`, `owner_peer:
+  ""`), the same posture as telegram/whatsapp; the channel stays
+  enabled on its localhost port, and the docs no longer claim the
+  wildcard is safe.
+- **Approval prompts truncated commands at 60 chars (AK-08).**
+  The `command` argument now renders in full up to 500 chars, and
+  past that with an explicit "… (N chars total)" note — the
+  dangerous tail is never silently cut from what the approver
+  sees. Other arguments keep the short rendering.
+- **Scheduler shell jobs bypassed the blocklist (AK-12).** Legacy
+  shell jobs run unattended via `shell=True` and never passed the
+  exec gate. `Scheduler.add()` now refuses a blocklisted command
+  with a ValueError, `run_once()` re-checks at run time (a job
+  stored before this check, or written to the store directly, is
+  refused without executing), and the dashboard job API returns
+  the same refusal as a 400.
+- **fetch_url DNS-rebinding window (AK-13).** The SSRF guard
+  validated one DNS resolution and urllib resolved again to
+  connect, so a hostile name could answer public at check time
+  and private at connect time. Connections now dial the validated
+  address: the handlers resolve once per request (per redirect
+  hop), require every answer to be public, and pin the socket to
+  it, while HTTPS keeps the real hostname for SNI and certificate
+  verification. When a proxy is configured, resolution still
+  happens at the proxy, as before.
+- **Scheduler contract bug.** `validate_schedule()` (and
+  `parse_cron` / `parse_at`) raised AttributeError on non-string
+  input; they now raise the documented ValueError.
+
 ## [0.6.39] - 2026-11-23
 
 ### Fixed

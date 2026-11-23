@@ -514,3 +514,16 @@ def test_session_store_history_cap(tmp_path):
         s.append_message("k", "in", f"m{i}")
     assert len(s.recent("k", limit=50)) == 5
     s.close()
+
+
+def test_webchat_defaults_are_default_deny(tmp_path):
+    """AK-07: WebChat used to ship allowlist ["*"] and owner_peer
+    "local" — any local process (or any web page in the user's
+    browser) could claim the owner peer and self-approve tool calls.
+    The shipped defaults are default-deny like every other channel;
+    the channel itself stays enabled on its localhost port."""
+    cfg = load_config(tmp_path / "channels.yaml")  # missing file: defaults
+    webchat = cfg["channels"]["webchat"]
+    assert webchat["enabled"] is True
+    assert webchat["allowlist"] == []
+    assert webchat["owner_peer"] == ""

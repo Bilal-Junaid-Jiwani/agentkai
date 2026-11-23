@@ -38,14 +38,16 @@ channels:
              allowlist: ["123456"], owner_peer: "123456"}
   discord:  {enabled: false, token_env: DISCORD_BOT_TOKEN,
              allowlist: ["789"], owner_peer: "789"}
-  webchat:  {enabled: true, port: 18790, allowlist: ["*"], owner_peer: "local"}
+  webchat:  {enabled: true, port: 18790, allowlist: [], owner_peer: ""}
   whatsapp: {enabled: false, sidecar_url: "http://localhost:18791",
              allowlist: ["+15551234567"], owner_peer: "+15551234567"}
 ```
 
 - **allowlist**: peer ids allowed to talk to the agent. Unknown senders
-  are logged and get no reply. `"*"` allows anyone — only sensible for
-  WebChat, which binds 127.0.0.1.
+  are logged and get no reply. `"*"` allows anyone — avoid it even for
+  WebChat: it binds 127.0.0.1, but any local process or browser page
+  can reach that port and claim any peer id, so the shipped default
+  is an empty (deny-all) allowlist on every channel.
 - **owner_peer**: the owner's id on that channel. Only the owner can
   answer approval requests.
 - Tokens come from the environment (`token_env`) or `token:` in the file.

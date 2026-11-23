@@ -37,7 +37,7 @@ from ..memory import Memory
 from ..permissions import Action, PermissionGate
 from ..providers import ALIASES, ProviderConfig, resolve_model
 from ..scheduler import Job, Scheduler, parse_at, parse_cron
-from ..tools import default_registry
+from ..tools import _is_dangerous, default_registry
 
 STATIC_DIR = Path(__file__).parent / "static"
 VERSION = "0.3.0"
@@ -198,6 +198,15 @@ def _validate_job_payload(body: JobUpsertRequest) -> Job:
         raise HTTPException(400, f"bad schedule: {exc}") from exc
     prompt = (body.prompt or "").strip()
     command = (body.command or "").strip()
+    if command:
+        # Shell jobs run unattended via shell=True; the exec
+        # blocklist is the only gate they ever meet (Scheduler.add
+        # enforces it too — this is the API-facing 400).
+        reason = _is_dangerous(command)
+        if reason is not None:
+            raise HTTPException(
+                400, f"job command refused by the safety blocklist: "
+                     f"{reason}")
     if not prompt and not command and body.job_type in ("cron", "at"):
         raise HTTPException(
             400, "cron/at jobs need a 'prompt' (agent job) or a "

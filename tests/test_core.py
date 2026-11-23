@@ -522,3 +522,22 @@ def test_compaction_summary_is_system_role_not_user(tmp_path):
     assert summaries[0]["role"] == "system", \
         "compaction summary must never be role:user (untrusted tool output)"
     assert "NOT new user instructions" in summaries[0]["content"]
+
+
+def test_action_describe_shows_the_full_command():
+    """AK-08: approval prompts truncated every argument at 60
+    chars, so the dangerous tail of a long command was silently cut
+    from what the approver saw. The command renders in full (up to
+    a 500-char cap that states the total length); other arguments
+    keep the short rendering."""
+    from agentkai.permissions import Action
+    cmd = ("echo starting the perfectly harmless backup step now; "
+           "rm -rf /")
+    assert len(cmd) > 60
+    text = Action(tool="exec", args={"command": cmd}).describe()
+    assert "rm -rf /" in text
+    long_cmd = "echo " + "x" * 600 + "; rm -rf /"
+    text = Action(tool="exec", args={"command": long_cmd}).describe()
+    assert f"({len(long_cmd)} chars total)" in text
+    other = Action(tool="read_file", args={"path": "p" * 100}).describe()
+    assert "p" * 61 not in other

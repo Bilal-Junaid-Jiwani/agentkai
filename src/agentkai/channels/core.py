@@ -207,7 +207,7 @@ def _default_config() -> dict:
             "discord": {"enabled": False, "token_env": "DISCORD_BOT_TOKEN",
                         "allowlist": [], "owner_peer": ""},
             "webchat": {"enabled": True, "port": 18790,
-                        "allowlist": ["*"], "owner_peer": "local"},
+                        "allowlist": [], "owner_peer": ""},
             "whatsapp": {"enabled": False,
                          "sidecar_url": "http://localhost:18791",
                          "allowlist": [], "owner_peer": ""},

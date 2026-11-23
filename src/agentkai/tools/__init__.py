@@ -21,6 +21,7 @@ Safety model (see research/ARCHITECTURE.md section 3):
 from __future__ import annotations
 
 import fnmatch
+import http.client
 import ipaddress
 import os
 import posixpath
@@ -228,7 +229,7 @@ def _normalize_path_spelling(tok: str) -> str:
     Non-absolute tokens are returned untouched: a relative path can never
     be ``/`` or the home directory.
     """
-    t = tok
+    t = _expand_user_vars(tok)
     if t.startswith("${HOME"):
         # ${HOME:offset[:length]} substring expansion and ${HOME#/%pat}
         # pattern removal are handled before the <op>word forms below:
@@ -471,15 +472,33 @@ def _is_broad_glob(seg: str) -> bool:
     return "*" in seg and seg.count("?") <= 1
 
 
+# The system trees a recursive delete must never take, named
+# explicitly. The guarded set used to be derived from passwd alone
+# (``/``, the homes, their parents), which incidentally covered
+# ``/var`` / ``/usr`` on machines whose system accounts live there
+# but left ``/etc``, ``/opt`` and ``/srv`` unguarded everywhere:
+# ``rm -rf /etc`` passed the scan and destroyed the machine's
+# configuration (verified against ``_is_dangerous`` before this
+# fix). Naming the trees makes the protection identical on every
+# machine. Subdirectories stay the caller's responsibility, exactly
+# like ``$HOME/project``: ``rm -rf /etc/myapp/cache`` and
+# ``rm -rf /var/tmp/scratch`` still pass.
+_SYSTEM_DIRS = frozenset({
+    "/etc", "/usr", "/var", "/opt", "/srv", "/boot", "/bin", "/sbin",
+    "/lib", "/lib64", "/sys", "/proc", "/dev", "/root",
+})
+
+
 def _guarded_dirs() -> set[str]:
-    """``/``, every account home, and the directory holding the homes."""
+    """``/``, every account home, the directory holding the homes,
+    and the system trees in ``_SYSTEM_DIRS``."""
     protected = {"/"} | _home_dirs()
     parents = {
         posixpath.dirname(home)
         for home in protected
         if home != "/" and posixpath.dirname(home) not in ("", "/")
     }
-    return protected | parents
+    return protected | parents | set(_SYSTEM_DIRS)
 
 
 def _glob_hits_guarded(spell: str) -> bool:
@@ -592,6 +611,26 @@ def _is_root_or_home(tok: str) -> bool:
     if not t:
         return False
     guarded = _guarded_dirs()
+    spellings = [t]
+    if _USER_VAR.search(t):
+        # A $USER/$LOGNAME component names the current account, and
+        # the directory it picks out under a homes parent is that
+        # account's home — spelled with the name the home directory
+        # actually has, which need not equal the account name (a
+        # root-run agent with HOME=/home/<name> is exactly that
+        # case). Price that spelling too.
+        home_name = posixpath.basename(str(Path.home()))
+        if home_name:
+            spellings.append(_USER_VAR.sub(home_name, t))
+    for spelling in spellings:
+        if _spelling_is_guarded(spelling, guarded):
+            return True
+    return False
+
+
+def _spelling_is_guarded(t: str, guarded: set[str]) -> bool:
+    """One spelling of a target against the guarded set (see
+    ``_is_root_or_home`` for the spelling rules)."""
     for expansion in _expand_braces(t):
         spell = _normalize_path_spelling(expansion)
         if not spell:
@@ -614,6 +653,41 @@ def _is_root_or_home(tok: str) -> bool:
     return False
 
 
+def _realpath_of(tok: str) -> str | None:
+    """The resolved path of an absolute literal target, if it moves.
+
+    The destructive-verb checks compare path *spellings*, so a
+    symlink spelling hid the target entirely: ``ln -s /dev/sda
+    /tmp/disklink`` is unchecked (a link is just a name), and ``dd
+    of=/tmp/disklink`` then wrote the raw device through it, while
+    ``rm -rf /tmp/homelink/`` (a link to a home, trailing slash)
+    deleted the home's contents (verified against ``_is_dangerous``
+    before this fix). Resolving the target with ``os.path.realpath``
+    — metadata only, nothing is opened for writing — prices the
+    spelling the shell will act on. Relative spellings, expansions
+    and globs return None: their resolution depends on a working
+    directory the scan does not know, and the other checks price
+    those spellings themselves.
+    """
+    spell = tok.strip("\"'")
+    if not spell.startswith("/") or "$" in spell or _has_glob(spell):
+        return None
+    resolved = os.path.realpath(spell)
+    return resolved if resolved != spell else None
+
+
+def _realpath_is_raw_device(tok: str) -> bool:
+    """True if *tok* is a symlink (chain) landing on a raw device."""
+    resolved = _realpath_of(tok)
+    return resolved is not None and _is_raw_device_spelling(resolved)
+
+
+def _realpath_is_guarded(tok: str) -> bool:
+    """True if *tok* is a symlink (chain) landing on a guarded dir."""
+    resolved = _realpath_of(tok)
+    return resolved is not None and _is_root_or_home(resolved)
+
+
 def _args_until_separator(tokens: list[str], start: int) -> list[str]:
     """Tokens from *start* up to (not including) the next shell separator."""
     out: list[str] = []
@@ -624,11 +698,29 @@ def _args_until_separator(tokens: list[str], start: int) -> list[str]:
     return out
 
 
+_BARE_VARIABLE = re.compile(r"^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$")
+
+
 def _rm_reason(tokens: list[str]) -> str | None:
     """Recursive rm aimed at / or the home dir — however rm is spelled.
 
     Matches ``rm`` by basename so ``/bin/rm`` and ``sudo /bin/rm`` are
     caught too; precise about targets so `rm -rf ./build` passes.
+
+    Three spellings the old scan missed (verified against
+    ``_is_dangerous`` before this fix):
+
+    - ``-R``: GNU rm treats it exactly like ``-r`` (POSIX specifies
+      both), but the recursive test only looked for lowercase ``r``,
+      so ``rm -Rf /`` sailed through.
+    - A target that is one bare unresolved variable (``rm -rf $T``):
+      same-command assignments are priced by
+      ``_resolve_simple_assignments`` before this runs, so a variable
+      still standing here gets its value from the environment the
+      scan cannot see — with recursion and force both requested,
+      there is no spelling left to price, and the delete is refused.
+    - A target spelled through a symlink into a guarded dir
+      (``rm -rf /tmp/homelink/``): priced by ``_realpath_is_guarded``.
     """
     for i, tok in enumerate(tokens):
         if _basename(tok) != "rm":
@@ -637,11 +729,21 @@ def _rm_reason(tokens: list[str]) -> str | None:
         recursive = any(
             t == "--recursive"
             or (t.startswith("-") and not t.startswith("--")
-                and "r" in t[1:])
+                and ("r" in t[1:] or "R" in t[1:]))
+            for t in args)
+        force = any(
+            t == "--force"
+            or (t.startswith("-") and not t.startswith("--")
+                and "f" in t[1:])
             for t in args)
         targets = [t for t in args if not t.startswith("-")]
-        if recursive and any(_is_root_or_home(t) for t in targets):
+        if recursive and any(
+                _is_root_or_home(t) or _realpath_is_guarded(t)
+                for t in targets):
             return "recursive delete of / or home directory"
+        if recursive and force and any(
+                _BARE_VARIABLE.match(t.strip("\"'")) for t in targets):
+            return "recursive delete of an unresolved variable target"
     return None
 
 
@@ -654,7 +756,8 @@ def _find_reason(tokens: list[str]) -> str | None:
         if not any(t in ("-delete", "-exec", "-execdir") for t in args):
             continue
         paths = [t for t in args if not t.startswith("-")]
-        if any(_is_root_or_home(p) for p in paths):
+        if any(_is_root_or_home(p) or _realpath_is_guarded(p)
+               for p in paths):
             return "find deleting from / or home directory"
     return None
 
@@ -925,6 +1028,139 @@ def _expand_ansi_c_quoting(command: str) -> str:
         out.append(c)
         i += 1
     return "".join(out)
+
+
+def _normalize_command(command: str) -> str:
+    """Collapse the shell spellings the raw patterns cannot see across.
+
+    Two spellings are rewritten before every check, the way the shell
+    itself rewrites them before acting (verified against
+    ``_is_dangerous`` before this fix):
+
+    - Line continuations: a backslash-newline joins two physical
+      lines into one logical command, so ``dd if=/dev/zero \\<newline>
+      of=/dev/sda`` writes the device — but the ``dd`` pattern's
+      ``[^\\n…]`` span cannot cross the newline, and ``dd`` had no
+      token-stage check to fall back on. Joining the lines first
+      hands every later check the command the shell actually runs.
+    - ``$IFS`` / ``${IFS}``: the shell word-splits on the expansion,
+      so ``rm${IFS}-rf${IFS}/`` is ``rm -rf /`` — but the literal
+      token matches no command or flag check. Replacing the expansion
+      with a plain space (its first character, and the only one that
+      matters for word splitting here) spells the command the shell
+      sees. ``$IFS`` followed by a name character is a different
+      variable (``$IFSx``) and is left alone.
+    """
+    command = command.replace("\\\r\n", "").replace("\\\n", "")
+    command = command.replace("${IFS}", " ")
+    return re.sub(r"\$IFS(?![A-Za-z0-9_])", " ", command)
+
+
+def _current_username() -> str:
+    """The account name the exec shell will expand ``$USER`` to."""
+    try:
+        import pwd
+
+        return pwd.getpwuid(os.getuid()).pw_name
+    except Exception:  # noqa: BLE001 - fall back to the environment
+        return os.environ.get("USER") or os.environ.get("LOGNAME") or ""
+
+
+_USER_VAR = re.compile(r"\$\{USER\}|\$USER(?![A-Za-z0-9_])"
+                       r"|\$\{LOGNAME\}|\$LOGNAME(?![A-Za-z0-9_])")
+
+
+def _expand_user_vars(tok: str) -> str:
+    """Expand ``$USER`` / ``$LOGNAME`` spellings inside a path token.
+
+    The shell expands them to the current account name before acting,
+    so ``rm -rf /home/$USER`` wipes the caller's home — but the path
+    checks compared the literal ``$USER`` spelling and let it through
+    (verified against ``_is_dangerous`` before this fix). Only these
+    two variables are expanded: their value is fixed by the login
+    session the exec shell inherits, unlike arbitrary variables,
+    which the token-stage assignment pass handles instead.
+    """
+    user = _current_username()
+    if not user:
+        return tok
+    return _USER_VAR.sub(user, tok)
+
+
+_BRACED_EXPANSION = re.compile(
+    r"\$\{([A-Za-z_][A-Za-z0-9_]*)(:?[-=+?])([^{}]*)\}")
+_PLAIN_EXPANSION = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def _expand_vars(text: str, env: dict[str, str]) -> str:
+    """Expand the parameter expansions the scan can price exactly.
+
+    ``env`` holds the same-command assignments collected by
+    ``_resolve_simple_assignments``. ``${VAR:-word}`` and its kin are
+    expanded for *every* variable: with the variable unset (the
+    checker's model for a name it has never seen assigned) the shell
+    yields ``word`` for the ``-``/``=``/``?`` forms and nothing for
+    the ``+`` forms, so ``rm -rf ${D:-/}`` is a delete of ``/`` and
+    ``${x:-rm} -rf /`` runs ``rm`` — both slipped past the literal
+    checks (verified against ``_is_dangerous`` before this fix).
+    ``$HOME``/``${HOME…}`` forms are left untouched: the path
+    normalizers price those themselves, with more spellings than a
+    plain substitution knows. Plain ``$VAR`` / ``${VAR}`` expand only
+    from ``env`` — an unassigned variable's environment value is not
+    knowable here, and guessing it would misprice benign commands.
+    """
+    def braced(m: re.Match) -> str:
+        name, op, word = m.group(1), m.group(2), m.group(3)
+        if name == "HOME":
+            return m.group(0)
+        if name in env:
+            value = env[name]
+            if op in (":+", "+"):
+                return word if value else ""
+            if op in (":-", ":=", ":?"):
+                return value if value else word
+            return value  # "-", "=", "?": the value even when empty
+        if op in (":+", "+"):
+            return ""
+        return word
+
+    text = _BRACED_EXPANSION.sub(braced, text)
+    return _PLAIN_EXPANSION.sub(
+        lambda m: env.get(m.group(1), m.group(0)), text)
+
+
+def _resolve_simple_assignments(tokens: list[str]) -> list[str]:
+    """Price same-command ``NAME=value`` assignments into later tokens.
+
+    The shell evaluates ``T=/; rm -rf $T`` as a delete of ``/`` and
+    ``X=rm; $X -rf /`` as an ``rm`` invocation, but the scan compared
+    literal tokens and saw neither the verb nor the target (verified
+    against ``_is_dangerous`` before this fix). Assignments are only
+    collected at a command position (the start of the token stream or
+    right after a separator, including the prefix chain before a
+    command word), and every later token is rewritten with
+    ``_expand_vars``. The assignment tokens themselves are kept
+    verbatim — they name no command — and unknown variables are left
+    spelled as-is for the other checks to price.
+    """
+    env: dict[str, str] = {}
+    out: list[str] = []
+    at_command_start = True
+    for tok in tokens:
+        if tok in _SEPARATORS:
+            out.append(tok)
+            at_command_start = True
+            continue
+        if at_command_start:
+            m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", tok,
+                         re.DOTALL)
+            if m:
+                env[m.group(1)] = _expand_vars(m.group(2), env)
+                out.append(tok)
+                continue
+        out.append(_expand_vars(tok, env))
+        at_command_start = False
+    return out
 
 
 _SYMBOLIC_CLAUSE = re.compile(r"^([ugoa]*)([+-=])([rwxXstugo]*)$")
@@ -1274,6 +1510,11 @@ def _is_raw_device_spelling(tok: str) -> bool:
     return False
 
 
+def _is_device_target(tok: str) -> bool:
+    """A raw-device spelling, or a symlink spelling landing on one."""
+    return _is_raw_device_spelling(tok) or _realpath_is_raw_device(tok)
+
+
 def _raw_device_reason(tokens: list[str]) -> str | None:
     """``cp``/``mv``/``tee``/``install`` writing to a raw disk or memory device.
 
@@ -1332,7 +1573,7 @@ def _raw_device_reason(tokens: list[str]) -> str | None:
                 value_longs=frozenset(("output", "dump-header")))
             for flag, val in values:
                 if flag in ("o", "output", "D", "dump-header") \
-                        and val and _is_raw_device_spelling(val):
+                        and val and _is_device_target(val):
                     return "raw disk write"
             continue
         if name == "wget":
@@ -1349,7 +1590,7 @@ def _raw_device_reason(tokens: list[str]) -> str | None:
             for flag, val in values:
                 if flag in ("O", "output-document", "o", "output-file",
                             "a", "append-output") \
-                        and val and _is_raw_device_spelling(val):
+                        and val and _is_device_target(val):
                     return "raw disk write"
             continue
         if name == "rsync":
@@ -1370,7 +1611,7 @@ def _raw_device_reason(tokens: list[str]) -> str | None:
             candidates += [v for flag, v in values
                            if flag == "log-file"]
             for dest in candidates:
-                if dest and _is_raw_device_spelling(dest):
+                if dest and _is_device_target(dest):
                     return "raw disk write"
             continue
         if name == "scp":
@@ -1382,7 +1623,7 @@ def _raw_device_reason(tokens: list[str]) -> str | None:
             operands, _shorts, _longs, _vals = _split_tool_args(
                 args, value_shorts=frozenset("PcFiloS"),
                 value_longs=frozenset())
-            if operands and _is_raw_device_spelling(operands[-1]):
+            if operands and _is_device_target(operands[-1]):
                 return "raw disk write"
             continue
         operands: list[str] = []
@@ -1432,7 +1673,7 @@ def _raw_device_reason(tokens: list[str]) -> str | None:
         else:
             candidates = []
         for dest in candidates:
-            if dest and _is_raw_device_spelling(dest):
+            if dest and _is_device_target(dest):
                 return "raw disk write"
     return None
 
@@ -1465,7 +1706,7 @@ def _device_wipe_reason(tokens: list[str]) -> str | None:
             operands.append(arg)
             j += 1
         for target in operands:
-            if target and _is_raw_device_spelling(target):
+            if target and _is_device_target(target):
                 return "raw disk wipe"
     return None
 
@@ -2543,29 +2784,70 @@ def _format_device_reason(tokens: list[str]) -> str | None:
                     if operands[0] == "destroy"
                     else "ZFS snapshot rollback")
         elif name == "nvme":
-            # Only `format` and `sanitize` destroy the namespace:
-            # format erases every block, sanitize crypto-erases /
-            # block-erases the whole device. Everything else (list,
-            # smart-log, id-ctrl, id-ns, get-feature, ...) only reads.
-            # Value options per nvme --help: format takes -s/--ses,
-            # -l/--lbaf, -i/--pi, -p/--pil, -m/--ms, -n/--namespace-id;
-            # sanitize takes -a/--sanact and -p/--ovrpat. A value is
+            # Only the destructive subcommands are blocked: `format`
+            # and `sanitize` erase the whole namespace, and — the
+            # spellings this fix adds — `write` writes arbitrary data
+            # over it, `write-zeroes` zeroes a range (the whole
+            # namespace by default), `write-uncorrectable` flags
+            # blocks unreadable, `dsm` with --ad deallocates (TRIMs)
+            # the named ranges, and `delete-ns` removes the namespace
+            # outright; all five passed unchecked while their format /
+            # sanitize siblings were already blocked (verified against
+            # ``_is_dangerous`` before this fix). Everything else
+            # (list, smart-log, id-ctrl, id-ns, get-feature, and
+            # `verify`, which only reads the namespace back) stays
+            # allowed, as does `dsm` without --ad (write-zero /
+            # integrity hints destroy nothing). Value options per
+            # nvme --help: format takes -s/--ses, -l/--lbaf, -i/--pi,
+            # -p/--pil, -m/--ms, -n/--namespace-id; sanitize takes
+            # -a/--sanact and -p/--ovrpat; the write family takes
+            # --slba/--nlb/--data-size/--data and kin. A value is
             # never a device in legitimate use, so a device spelling
             # in either position blocks — it is either an evasion
             # attempt (``-a /dev/nvme0n1``) or nonsense that would
             # fail in nvme anyway.
-            operands, _shorts, _longs, values = _split_tool_args(
-                args, value_shorts=frozenset("slipmna"),
+            operands, shorts, longs, values = _split_tool_args(
+                args, value_shorts=frozenset("slipmnaczde"),
                 value_longs=frozenset(
                     ("ses", "lbaf", "pi", "pil", "ms",
-                     "namespace-id", "sanact", "ovrpat")))
-            if not operands or operands[0] not in ("format",
-                                                    "sanitize"):
+                     "namespace-id", "sanact", "ovrpat", "slba",
+                     "nlb", "data-size", "data", "metadata-size",
+                     "metadata", "apptag", "appmask", "reftag",
+                     "control", "storage-tag", "cdw12", "cdw13",
+                     "lr", "fua", "prinfo", "dtype", "dspec",
+                     "dsmgmt", "timeout", "start-block",
+                     "block-count")))
+            if not operands:
+                continue
+            sub = operands[0]
+            if sub == "dsm":
+                # Only the deallocate form destroys: without --ad
+                # (or -a) dsm sends non-destructive DSM hints. The
+                # device is checked in the option values too: -a is a
+                # flag in dsm (a value option in format), so the
+                # shared split above may have consumed the device as
+                # -a's "value" — and dsm's real values are numbers,
+                # never device spellings.
+                if "ad" not in longs and "a" not in shorts:
+                    continue
+                targets = list(operands[1:]) + [v for _f, v in values]
+                if any(_is_raw_device_spelling(o) for o in targets):
+                    return "NVMe dataset management deallocate"
+                continue
+            if sub not in ("format", "sanitize", "write",
+                           "write-zeroes", "write-uncorrectable",
+                           "delete-ns"):
                 continue
             targets = list(operands[1:]) + [v for _f, v in values]
             if any(_is_raw_device_spelling(o) for o in targets):
-                return ("NVMe namespace format" if operands[0] == "format"
-                        else "NVMe sanitize")
+                return {
+                    "format": "NVMe namespace format",
+                    "sanitize": "NVMe sanitize",
+                    "write": "NVMe namespace write",
+                    "write-zeroes": "NVMe write zeroes",
+                    "write-uncorrectable": "NVMe write uncorrectable",
+                    "delete-ns": "NVMe namespace delete",
+                }[sub]
         elif name == "hdparm":
             # The firmware secure-erase forms destroy the disk:
             # --security-erase / --security-erase-enhanced wipe every
@@ -2826,7 +3108,101 @@ def _format_device_reason(tokens: list[str]) -> str | None:
             elif len(operands) >= 2 and _is_raw_device_spelling(
                     operands[1]):
                 return "raw disk write"
+        elif name == "sg_sanitize":
+            # SANITIZE is the SCSI erase command family: --block
+            # block-erases, --crypto crypto-erases, --overwrite
+            # overwrites, --fail flags every block failed — each
+            # destroys the media exactly like the already-blocked
+            # ``sg_format --format``, but no check knew the tool
+            # (verified against ``_is_dangerous`` before this fix).
+            # There is no read-only run mode: only --help / --version
+            # print and exit. The device may be a /dev/sgN node, which
+            # the raw-device spellings do not enumerate, so those are
+            # matched here as well.
+            operands, _shorts, longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset("ot"),
+                value_longs=frozenset(
+                    ("overwrite", "test", "timeout")))
+            if longs & {"help", "version"}:
+                continue
+            if any(_is_raw_device_spelling(o)
+                   or _SG_DEVICE.match(_normalize_device_spelling(o))
+                   for o in operands):
+                return "SCSI sanitize"
+        elif name == "fio":
+            # fio benchmarks a target by writing patterns over it:
+            # with a block device as --filename and a write-class
+            # --rw mode (write / randwrite / rw / trim / …) it
+            # overwrites the disk exactly like ``dd`` — but no check
+            # knew the tool (verified against ``_is_dangerous``
+            # before this fix). Read modes on a device stay allowed
+            # (benchmarking reads is the point), as do write modes on
+            # a regular file. --filename takes a colon-separated list;
+            # every entry is priced. The mode may come from --rw or
+            # its long alias --readwrite, attached or separate.
+            filename_vals: list[str] = []
+            mode_vals: list[str] = []
+            j = 0
+            while j < len(args):
+                arg = args[j]
+                key, eq, val = arg.partition("=")
+                if key in ("--filename", "--rw", "--readwrite"):
+                    if not eq and j + 1 < len(args):
+                        val = args[j + 1]
+                        j += 1
+                    (filename_vals if key == "--filename"
+                     else mode_vals).append(val)
+                j += 1
+            write_modes = {"write", "randwrite", "rw", "randrw",
+                           "trim", "randtrim", "trimwrite",
+                           "randtrimwrite"}
+            if not any(m.split(":")[0].strip() in write_modes
+                       for m in mode_vals):
+                continue
+            if any(_is_device_target(entry)
+                   for val in filename_vals
+                   for entry in val.split(":") if entry):
+                return "raw disk write"
+        elif name == "fallocate":
+            # --zero-range / --punch-hole / --collapse-range (and
+            # their -z / -p / -c shorts) discard the named range in
+            # place: on a block device they zero / deallocate the
+            # disk's blocks exactly like the already-blocked
+            # ``blkdiscard`` — but no check knew the spelling
+            # (verified against ``_is_dangerous`` before this fix).
+            # A plain fallocate only reserves space, and the discard
+            # modes on a regular file are ordinary file work, so both
+            # stay allowed. Value options per fallocate --help (-l
+            # length, -o offset).
+            operands, shorts, longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset("lo"),
+                value_longs=frozenset(("length", "offset")))
+            if not (shorts & {"z", "p", "c"}
+                    or longs & {"zero-range", "punch-hole",
+                                "collapse-range"}):
+                continue
+            if any(_is_raw_device_spelling(o) for o in operands):
+                return "raw device discard"
+        elif name == "scrub":
+            # scrub writes pattern passes over its target file: on a
+            # raw device that is a full-disk overwrite, the same write
+            # ``shred`` is blocked for — but no check knew the tool
+            # (verified against ``_is_dangerous`` before this fix).
+            # Scrubbing a regular file is the tool's ordinary use and
+            # stays allowed. Value options per scrub --help (-p
+            # pattern file, -D directory prefix, -b block size).
+            operands, _shorts, _longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset("pDb"),
+                value_longs=frozenset(
+                    ("pattern-file", "dir-prefix", "blocksize")))
+            if any(_is_device_target(o) for o in operands):
+                return "raw disk wipe"
     return None
+
+
+# A SCSI generic device node: the sg_* tools take /dev/sgN as well as
+# the named disk, and the raw-device spellings do not enumerate it.
+_SG_DEVICE = re.compile(r"^/dev/sg[0-9]+$")
 
 
 # A quote the shell strips before acting, allowed between the pieces of
@@ -2989,6 +3365,549 @@ _DEVICE_REDIRECT_PATTERNS = [
 ]
 
 
+def _dd_reason(tokens: list[str]) -> str | None:
+    """Token-stage ``dd`` check: the ``of=`` target, priced like a path.
+
+    The raw ``dd`` pattern is the historical check, but it prices the
+    *spelling*: a target produced by an assignment (``of=$D`` with
+    ``D=/dev/sda`` priced by ``_resolve_simple_assignments``), hidden
+    behind a symlink (``of=/tmp/disklink``), or aimed at the SysRq
+    trigger all missed it, because a pattern over the raw string
+    cannot resolve any of those (verified against ``_is_dangerous``
+    before this fix). Here the target is a token, so the device,
+    realpath and SysRq prices all apply. Only ``of=`` counts: reading
+    a device (``if=/dev/sda``) to a file stays allowed.
+    """
+    for i, tok in enumerate(tokens):
+        if _basename(tok) != "dd":
+            continue
+        args = _args_until_separator(tokens, i + 1)
+        for arg in args:
+            if not arg.startswith("of="):
+                continue
+            target = arg[3:].strip("\"'")
+            if _is_device_target(target):
+                return "raw disk write"
+            if _normalize_path_spelling(target) == "/proc/sysrq-trigger":
+                return "power control"
+    return None
+
+
+def _pipe_reason(tokens: list[str]) -> str | None:
+    """A pipe whose sink executes what it receives.
+
+    The raw pattern only knew the download one-liner (``curl`` /
+    ``wget`` piped to a shell). The producer is irrelevant to the
+    sink: ``echo 'rm -rf /' | bash``, ``cat script | sh`` and a base64
+    decode piped to ``bash`` execute attacker-chosen text exactly
+    like the download does, and piping into ``at`` or ``crontab -``
+    is worse — the payload runs later, unattended (all verified
+    against ``_is_dangerous`` before this fix). Any pipe into a shell
+    word, ``at``, or a crontab install is therefore refused; a pipe
+    into ``crontab -l`` only lists and stays allowed, as do pipes
+    into ordinary filters (``grep``, ``sha256sum``, ``tee`` …).
+    """
+    for i, tok in enumerate(tokens):
+        if tok != "|":
+            continue
+        j = i + 1
+        if j < len(tokens) and _basename(tokens[j]) == "sudo":
+            j += 1
+            while j < len(tokens) and tokens[j].startswith("-"):
+                j += 1
+        if j >= len(tokens):
+            continue
+        sink = _basename(tokens[j])
+        sink_args = _args_until_separator(tokens, j + 1)
+        if sink in _SHELLS:
+            return "piped to a shell"
+        if sink == "at":
+            return "piped to a job scheduler"
+        if sink == "crontab":
+            if all(a in ("-l", "--list") for a in sink_args):
+                continue
+            return "piped to crontab"
+    return None
+
+
+def _power_reason(tokens: list[str]) -> str | None:
+    """Availability attacks the power-word pattern never named.
+
+    ``shutdown`` / ``reboot`` / ``halt`` / ``poweroff`` are raw
+    patterns, but their equivalents passed unchecked (verified
+    against ``_is_dangerous`` before this fix): ``init 6`` /
+    ``telinit 0`` change runlevel directly; ``kill … 1`` kills the
+    init process (fatal inside a container / namespace, where PID 1
+    is the container); and a write to ``/proc/sysrq-trigger`` —
+    spelled as a ``tee`` / ``cp`` / ``mv`` / ``install`` destination
+    here, as a redirect and as ``dd of=`` elsewhere — forces an
+    immediate unsynced reboot (``echo b``), crash or poweroff. The
+    SysRq *file* in another directory (``/tmp/sysrq-trigger``) is a
+    plain file and stays allowed, as do ``init --help``, ``kill`` of
+    an ordinary pid, and ``kill %1`` (a jobspec, not PID 1).
+    """
+    for i, tok in enumerate(tokens):
+        name = _basename(tok)
+        args = _args_until_separator(tokens, i + 1)
+        if name in ("init", "telinit"):
+            if any(a in ("0", "6") for a in args
+                   if not a.startswith("-")):
+                return "power control"
+        elif name == "kill":
+            operands: list[str] = []
+            j = 0
+            while j < len(args):
+                arg = args[j]
+                if arg in ("-s", "--signal"):
+                    j += 2
+                    continue
+                if arg.startswith("-") and arg != "-":
+                    j += 1
+                    continue
+                operands.append(arg)
+                j += 1
+            if "1" in operands:
+                return "kill of PID 1 (init)"
+        elif name in ("tee", "cp", "mv", "install"):
+            operands = [a for a in args if not a.startswith("-")]
+            targets = operands if name == "tee" else operands[-1:]
+            if any(_normalize_path_spelling(a.strip("\"'"))
+                   == "/proc/sysrq-trigger" for a in targets):
+                return "power control"
+    return None
+
+
+_XARGS_VALUE_SHORTS = frozenset("EILnPsad")
+_XARGS_VALUE_LONGS = frozenset(
+    ("arg-file", "delimiter", "eof", "max-args", "max-chars",
+     "max-lines", "max-procs", "replace", "process-slot-var"))
+
+
+def _xargs_reason(tokens: list[str]) -> str | None:
+    """``xargs`` feeding a destructive verb targets the scan cannot see.
+
+    With ``xargs`` the destructive target arrives on stdin, so the
+    tokens after the verb name no guarded path at all: ``echo / |
+    xargs rm -rf`` deletes ``/`` and ``printf '/dev/sda' | xargs
+    -I{} dd of={}`` writes the device, yet both passed every check
+    (verified against ``_is_dangerous`` before this fix). A recursive
+    ``rm`` under xargs is therefore refused outright — its targets
+    are by construction unpriceable here — while a plain ``xargs rm``
+    (deleting listed files, the ordinary use) stays allowed. ``dd``
+    under xargs is priced on its literal ``of=``: a raw device, a
+    symlink to one, or the ``-I`` replacement string standing in for
+    stdin-supplied names all refuse.
+    """
+    for i, tok in enumerate(tokens):
+        if _basename(tok) != "xargs":
+            continue
+        args = _args_until_separator(tokens, i + 1)
+        # The command word is the first operand; everything after it
+        # is the command's own argument list, flags included — so
+        # scan positionally instead of splitting flags away.
+        cmd_at: int | None = None
+        j = 0
+        while j < len(args):
+            arg = args[j]
+            if arg == "--":
+                cmd_at = j + 1 if j + 1 < len(args) else None
+                break
+            if arg.startswith("--") and len(arg) > 2:
+                name, eq, _val = arg[2:].partition("=")
+                j += 1 if eq or name not in _XARGS_VALUE_LONGS else 2
+                continue
+            if arg.startswith("-") and arg != "-":
+                consumed_next = False
+                k = 1
+                while k < len(arg):
+                    if arg[k] in _XARGS_VALUE_SHORTS:
+                        consumed_next = k + 1 >= len(arg)
+                        break
+                    k += 1
+                j += 2 if consumed_next else 1
+                continue
+            cmd_at = j
+            break
+        if cmd_at is None:
+            continue  # no command word: xargs runs echo
+        cmd = _basename(args[cmd_at])
+        cmd_args = args[cmd_at + 1:]
+        if cmd == "rm":
+            recursive = any(
+                a == "--recursive"
+                or (a.startswith("-") and not a.startswith("--")
+                    and ("r" in a[1:] or "R" in a[1:]))
+                for a in cmd_args)
+            if recursive:
+                return "recursive delete via xargs"
+        elif cmd == "dd":
+            repl: str | None = None
+            for j, arg in enumerate(args):
+                if arg in ("-I", "--replace"):
+                    repl = args[j + 1] if j + 1 < len(args) else "{}"
+                elif arg.startswith("--replace="):
+                    repl = arg.partition("=")[2]
+                elif arg.startswith("-I") and len(arg) > 2:
+                    repl = arg[2:]
+                elif arg == "-i":
+                    repl = "{}"  # -i implies -I{} in GNU xargs
+            for arg in cmd_args:
+                if not arg.startswith("of="):
+                    continue
+                target = arg[3:].strip("\"'")
+                if _is_device_target(target):
+                    return "raw disk write"
+                if repl and repl in target:
+                    return "raw disk write"
+    return None
+
+
+# Inline code handed to an interpreter is code the shell-level checks
+# cannot model: no ``rm`` token, no device token in a checked
+# position, no shell operator — yet the interpreter performs the
+# exact operations the blocklist exists to stop (recursive delete of
+# ``/``, raw writes to ``/dev/sda``, a ``system()`` back into a
+# shell). The payload is therefore scanned for the destructive
+# vocabulary of the interpreter world: process-spawning and
+# file-destroying APIs, raw-device names, and shell spellings inside
+# its string literals (each literal is rescanned as a command).
+# Benign one-liners (``python3 -c 'print(1)'``) name none of these
+# and stay allowed (all the blocked spellings verified against
+# ``_is_dangerous`` before this fix).
+_CODE_PAYLOAD_PATTERNS = [
+    (r"rmtree|os\.remove|os\.unlink|os\.rmdir|os\.system|os\.popen"
+     r"|os\.exec|subprocess|shutil|child_process|execSync|spawnSync"
+     r"|os\.execute|shell_exec|passthru\s*\(|system\s*\(|system\s+[\"']"
+     r"|popen\s*\(",
+     "destructive call in inline code"),
+    (r"/dev/(?:sd[a-z]+|hd[a-z]+|vd[a-z]+|nvme[0-9]+n[0-9]+"
+     r"|mmcblk[0-9]+|dm-[0-9]+|loop[0-9]+|md[0-9]+|ram[0-9]+"
+     r"|nbd[0-9]+|rbd[0-9]+|mtd[0-9]+|mtdblock[0-9]+|dasd[a-z]+"
+     r"|xvd[a-z]+|mem\b|kmem\b|port\b)",
+     "raw device access in inline code"),
+    (r"\bmkfs\b|\bdd\b[^;]*\bof\s*=|\brm\s+-[a-zA-Z]*[rR]",
+     "destructive command in inline code"),
+]
+
+_STRING_LITERAL = re.compile(r"\"([^\"]*)\"|'([^']*)'")
+
+
+def _code_payload_reason(payload: str, depth: int) -> str | None:
+    """Scan an interpreter's inline code argument for destruction."""
+    for pattern, reason in _CODE_PAYLOAD_PATTERNS:
+        if re.search(pattern, payload):
+            return reason
+    if depth < 3:
+        reason = _is_dangerous(payload, depth + 1)
+        if reason:
+            return reason
+        for m in _STRING_LITERAL.finditer(payload):
+            literal = m.group(1) if m.group(1) is not None else m.group(2)
+            if literal and literal != payload:
+                reason = _is_dangerous(literal, depth + 1)
+                if reason:
+                    return reason
+    return None
+
+
+_PIPE_STOPS = {"|", "&&", "||", "&", "`"}
+
+
+def _args_until_pipe(tokens: list[str], start: int) -> list[str]:
+    """Tokens from *start* up to the next pipe / chain operator.
+
+    Unlike ``_args_until_separator`` this does not stop at ``;``:
+    inside an interpreter's code argument a semicolon is a statement
+    separator, not a command boundary, and the code must be priced
+    whole (see ``_interpreter_reason``).
+    """
+    out: list[str] = []
+    for tok in tokens[start:]:
+        if tok in _PIPE_STOPS:
+            break
+        out.append(tok)
+    return out
+
+
+def _inline_code_payload(args: list[str], flag_chars: frozenset,
+                         flag_longs: frozenset,
+                         value_shorts: frozenset) -> str | None:
+    """The code argument of a ``-c``/``-e``-style flag, or None.
+
+    Mirrors the interpreters' own parsing: the flag may end a short
+    cluster (``-ec '…'``), carry its code attached (``-c'…'``), or
+    take the next word; a first non-option word is a script file,
+    not inline code, and ends the search. The payload is rejoined
+    from the operator-split fragments (``_split_shell_operators``
+    breaks ``os.system("…")`` into pieces at the parentheses and the
+    code's own semicolons), so the scan sees the whole program text;
+    words after the program (the program's own argv) are scanned
+    along with it, which can only refuse text that is itself
+    destructive.
+    """
+    j = 0
+    while j < len(args):
+        arg = args[j]
+        if arg == "--":
+            return None
+        if arg.startswith("--"):
+            name, eq, val = arg[2:].partition("=")
+            if name in flag_longs:
+                if eq:
+                    return " ".join([val] + args[j + 1:])
+                return " ".join(args[j + 1:]) or None
+            j += 1
+            continue
+        if arg.startswith("-") and arg != "-":
+            k = 1
+            consumed_next = False
+            while k < len(arg):
+                ch = arg[k]
+                if ch in flag_chars:
+                    rest = arg[k + 1:]
+                    if rest:
+                        return " ".join([rest] + args[j + 1:])
+                    return " ".join(args[j + 1:]) or None
+                if ch in value_shorts:
+                    consumed_next = k + 1 >= len(arg)
+                    break
+                k += 1
+            j += 2 if consumed_next else 1
+            continue
+        return None
+    return None
+
+
+# basename -> (code-flag short chars, code-flag long names,
+#              value-taking short options before the code flag)
+_INTERPRETERS = (
+    (re.compile(r"^python[0-9]*(\.[0-9]+)?$"),
+     frozenset("c"), frozenset(), frozenset("WX")),
+    (re.compile(r"^perl[0-9.]*$"),
+     frozenset("eE"), frozenset(), frozenset("IMm")),
+    (re.compile(r"^ruby[0-9.]*$"),
+     frozenset("e"), frozenset(), frozenset("Ir")),
+    (re.compile(r"^node(js)?$"),
+     frozenset("ep"), frozenset(("eval", "print")), frozenset("r")),
+    (re.compile(r"^php[0-9.]*$"),
+     frozenset("r"), frozenset(), frozenset("dc")),
+    (re.compile(r"^lua(jit)?[0-9.]*$"),
+     frozenset("e"), frozenset(), frozenset("l")),
+)
+
+
+def _interpreter_reason(tokens: list[str], depth: int) -> str | None:
+    """Interpreter one-liners and ``ssh`` remote commands.
+
+    ``python3 -c``, ``perl -e``, ``ruby -e``, ``node -e``, ``php
+    -r``, ``lua -e``: the code argument is scanned by
+    ``_code_payload_reason``. ``awk`` programs are refused when they
+    shell out via ``system(`` (the program is the first operand;
+    ``-f`` file programs are out of scope, like other script files
+    the scan does not read). ``ssh host 'cmd'`` runs ``cmd`` on
+    another machine with the same blast radius, so the remote
+    command string is rescanned as a command; an interactive
+    ``ssh host`` (no command) names nothing to scan.
+    """
+    for i, tok in enumerate(tokens):
+        name = _basename(tok)
+        args = _args_until_pipe(tokens, i + 1)
+        if name in ("awk", "gawk", "mawk", "nawk"):
+            # The program arrives fragmented by operator splitting
+            # (parentheses and braces are split points), so price the
+            # rejoined text: an awk program that shells out through
+            # system() runs an arbitrary command.
+            if re.search(r"system\s*\(|system\s+[\"']", " ".join(args)):
+                return "destructive call in inline code"
+            continue
+        if name == "ssh":
+            operands, _s, _l, _v = _split_tool_args(
+                args, value_shorts=frozenset("bcDFiJlmOopRSWw"),
+                value_longs=frozenset(
+                    ("bind-address", "ciphers", "identity",
+                     "jump", "login-name", "option", "port",
+                     "proxy-command", "request-tty", "forward",
+                     "local-forward", "remote-forward",
+                     "dynamic-forward", "config", "macs",
+                     "hostname", "user")))
+            if len(operands) >= 2 and depth < 3:
+                reason = _is_dangerous(" ".join(operands[1:]),
+                                       depth + 1)
+                if reason:
+                    return reason
+            continue
+        for pattern, flag_chars, flag_longs, value_shorts in \
+                _INTERPRETERS:
+            if not pattern.match(name):
+                continue
+            payload = _inline_code_payload(
+                args, flag_chars, flag_longs, value_shorts)
+            if payload:
+                reason = _code_payload_reason(payload, depth)
+                if reason:
+                    return reason
+            break
+    return None
+
+
+_SCRIPT_SCAN_MAX = 1_000_000
+
+
+def _shell_invocation_kind(tokens: list[str], start: int):
+    """Classify the shell invocation at *start* (just past the shell).
+
+    Returns ``("c", payload)`` for a ``-c`` invocation (the nested
+    rescan owns it), ``("stdin", None)`` for ``-s``, ``("file",
+    path)`` when the first operand is a script file, and ``(None,
+    None)`` for an interactive invocation. The option walk mirrors
+    ``_shell_c_payload`` (attached arguments, clusters, value-taking
+    options), additionally noting the ``-s`` flag.
+    """
+    j = start
+    stdin = False
+    while j < len(tokens):
+        tok = tokens[j]
+        if tok in _SEPARATORS:
+            break
+        if tok == "--":
+            if j + 1 < len(tokens) and tokens[j + 1] not in _SEPARATORS:
+                return ("stdin", None) if stdin else ("file",
+                                                      tokens[j + 1])
+            return ("stdin", None) if stdin else (None, None)
+        if tok.startswith("--"):
+            if tok == "--stdin":
+                stdin = True
+                j += 1
+                continue
+            if "=" in tok:
+                j += 1
+            elif tok in _VALUE_OPTIONS:
+                j += 2
+            else:
+                j += 1
+            continue
+        if tok.startswith("+") and len(tok) > 1:
+            j += 1
+            continue
+        if tok.startswith("-") and len(tok) > 1:
+            k = 1
+            consumed_value = False
+            while k < len(tok):
+                ch = tok[k]
+                if ch == "c":
+                    return ("c", None)
+                if ch == "s":
+                    stdin = True
+                if ch == "o":
+                    consumed_value = k + 1 >= len(tok)
+                    break
+                k += 1
+            j += 2 if consumed_value else 1
+            continue
+        return ("stdin", None) if stdin else ("file", tok)
+    return ("stdin", None) if stdin else (None, None)
+
+
+def _script_file_reason(tokens: list[str], depth: int) -> str | None:
+    """A script file's contents are executed — so scan the contents.
+
+    ``bash /tmp/x.sh`` ran whatever the file held without any check:
+    the scan priced the command line, never the script (verified
+    against ``_is_dangerous`` before this fix). The agent can create
+    the file with its own write tool and then run it, so at exec time
+    the file exists and its contents are scanned here, recursively.
+    A missing file stays allowed (the shell errors, nothing runs),
+    and a benign script (``echo hi``, ``rm -rf build/``) scans clean.
+    ``source`` / ``.`` files get the same treatment. ``shell -s``
+    reads the script from stdin: with a file redirect the contents
+    are unknowable here and the invocation is refused; a heredoc
+    body is part of the command string, so the ordinary token scan
+    already sees it, and a pipe into a shell is ``_pipe_reason``'s.
+    Only command positions are considered (start of a command, after
+    a separator, or after ``sudo``), so ``echo bash`` and
+    ``cp x .`` are never mistaken for invocations.
+    """
+    if depth >= 3:
+        return None
+    for i, tok in enumerate(tokens):
+        if not (i == 0 or tokens[i - 1] in _SEPARATORS
+                or _basename(tokens[i - 1]) == "sudo"):
+            continue
+        name = _basename(tok)
+        args = _args_until_separator(tokens, i + 1)
+        target: str | None = None
+        if name in _SHELLS:
+            kind, val = _shell_invocation_kind(tokens, i + 1)
+            if kind == "stdin":
+                for arg in args:
+                    if arg == "<" or re.match(r"^\d*<(?![<])", arg) \
+                            or (arg.startswith("<")
+                                and not arg.startswith("<<")):
+                        return "shell script read from a redirected file"
+                continue
+            if kind != "file":
+                continue
+            target = val
+        elif tok in ("source", "."):
+            operands = [a for a in args if not a.startswith("-")]
+            if not operands:
+                continue
+            target = operands[0]
+        else:
+            continue
+        if target is None:
+            continue
+        path = target.strip("\"'")
+        try:
+            if not os.path.isfile(path):
+                continue
+            if os.path.getsize(path) > _SCRIPT_SCAN_MAX:
+                return "script file too large to scan"
+            text = Path(path).read_text(encoding="utf-8",
+                                        errors="replace")
+        except OSError:
+            continue
+        reason = _is_dangerous(text, depth + 1)
+        if reason:
+            return reason
+    return None
+
+
+# A command shlex cannot tokenize at all is not thereby safe: the
+# raw patterns above have already run, and this last-resort scan
+# covers the token-stage families with loose spellings, so an
+# unparseable command carrying a destructive construct is refused
+# rather than waved through (the fail-open hole of AK-01).
+_UNPARSEABLE_MARKERS = [
+    (r"\brm\b[^|;&\n]*-[a-zA-Z]*[rR][a-zA-Z]*\b[^|;&\n]*"
+     r"(?:/+|~|\$HOME|\$\{HOME|/home)",
+     "recursive delete of / or home directory"),
+    (r"\bfind\b[^|;&\n]*\s/[^|;&\n]*-(?:delete|exec)",
+     "find deleting from / or home directory"),
+    (r"\b(?:shred|wipefs|blkdiscard)\b[^|;&\n]*/dev/",
+     "raw disk wipe"),
+    (r"\b(?:cp|mv|tee|install)\b[^|;&\n]*/dev/"
+     r"(?:sd|hd|vd|nvme|mmcblk|mtd|dm-|loop|md[0-9]|nbd|rbd)",
+     "raw disk write"),
+    (r"\b(?:mke2fs|mkswap|fdisk|sfdisk|parted|sgdisk|gdisk|cgdisk"
+     r"|cfdisk|fixparts|sg_format|sg_sanitize)\b[^|;&\n]*/dev/",
+     "filesystem format"),
+    (r"\bnvme\s+(?:format|sanitize|write-zeroes|write)\b"
+     r"[^|;&\n]*/dev/",
+     "NVMe namespace format"),
+    (r"\bchmod\b[^|;&\n]*(?:[0-7]*777|a\+rwx|a=rwx)\s*/+(?:\s|$|[|;&])",
+     "permission nuke"),
+]
+
+
+def _unparseable_reason(command: str) -> str | None:
+    """Last-resort verdict for a command no tokenization could parse."""
+    for pattern, reason in _UNPARSEABLE_MARKERS:
+        if re.search(pattern, command):
+            return reason
+    return None
+
+
 def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     """Blocklist scan. Returns a reason string, or None if the command passes.
 
@@ -3065,11 +3984,59 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     device in the redirect patterns (``> /dev/../dev/sda``,
     ``> /dev/mapper/../sda``, ``> /dev/foo/../../dev/sda``), which
     the ``dd of=`` pattern and the copy / wipe checks already blocked.
+
+    The 0.6.40 audit round closed the remaining classes: the scan
+    now fails closed when tokenization fails (a ``#`` comment with
+    an apostrophe, ``rm -rf / # don't``, no longer waves every
+    token-stage check through); line continuations and ``$IFS``
+    are normalized before any pattern runs, and ``dd`` has a
+    token-stage check, so a split ``dd`` command is priced like the
+    joined one; ``rm`` recursion accepts ``-R`` as well as ``-r``;
+    the guarded set names the system trees (``/etc``, ``/usr``,
+    ``/var``, ``/opt``, ``/srv``, ``/boot``, ``/bin``, ``/sbin``,
+    ``/lib``, ``/lib64``, ``/sys``, ``/proc``, ``/dev``, ``/root``)
+    instead of deriving protection from passwd alone; same-command
+    assignments, ``${VAR:-default}`` expansions and ``$USER`` /
+    ``$LOGNAME`` path components are priced before the verb checks,
+    a recursive forced delete of one bare unresolved variable is
+    refused, and ``xargs`` feeding a recursive ``rm`` or a device
+    ``dd`` is refused; destructive targets spelled through symlinks
+    are resolved with ``realpath`` for the copy / wipe / ``dd`` /
+    ``rm`` / ``find`` checks; interpreter one-liners (``python -c``,
+    ``perl -e``, ``ruby -e``, ``node -e``, ``php -r``, ``lua -e``,
+    ``awk`` programs using ``system(``) have their code argument
+    scanned, and ``ssh`` remote commands are rescanned; any pipe
+    into a shell, ``at`` or a crontab install is refused (not just
+    the curl/wget download form), script files a shell is asked to
+    run (and ``source`` files) are scanned before they run, and
+    ``shell -s`` with a file redirect is refused; the NVMe write
+    family (``write``, ``write-zeroes``, ``write-uncorrectable``,
+    ``dsm --ad``, ``delete-ns``), ``sg_sanitize``, ``fio`` device
+    writes, ``fallocate`` discard modes on a device and ``scrub``
+    on a device are covered; and the availability spellings —
+    ``init``/``telinit`` runlevels 0/6, ``kill`` of PID 1, writes
+    to ``/proc/sysrq-trigger``, and fork bombs under any function
+    name — are refused.
     """
-    command = _expand_ansi_c_quoting(command)
+    command = _normalize_command(_expand_ansi_c_quoting(command))
     patterns = [
         (r":\(\)\s*\{", "fork bomb"),
+        # The fork-bomb pattern above only knew the literal name
+        # ``:``; any renamed self-recursive function whose body
+        # pipes or backgrounds a call to itself is the same bomb
+        # (``x(){ x|x& };x``), so the name is captured and required
+        # again inside the body, followed by a pipe or ``&``. A
+        # recursive function that merely calls itself with arguments
+        # (``walk(){ walk "$1"; }``) does not match.
+        (r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\)\s*\{[^}]*\b\1\s*(?:\||&)",
+         "fork bomb"),
         (r"\bmkfs(\.\w+)?\b", "filesystem format"),
+        # A redirect onto the SysRq trigger forces an immediate
+        # unsynced reboot / crash / poweroff (``echo b >
+        # /proc/sysrq-trigger``); the tee / copy / dd spellings are
+        # priced at the token stage (``_power_reason`` /
+        # ``_dd_reason``).
+        (r">>?\|?\s*['\"]?/+proc/sysrq-trigger\b", "power control"),
         # The raw-device redirect/``dd`` patterns are spelling-aware
         # the same way the token checks now are: the shell resolves
         # ``//``, ``/./`` and ``//`` inside the path before acting, so
@@ -3134,7 +4101,21 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     try:
         tokens = shlex.split(command, posix=True)
     except ValueError:
-        return None  # unparseable; the shell will report the syntax error
+        # Fail closed. The old code returned None here on the theory
+        # that the shell would report the syntax error — but a `#`
+        # comment makes the shell *ignore* the very text shlex chokes
+        # on: ``rm -rf / # don't`` tokenizes as an error for shlex
+        # (the apostrophe opens a quote that never closes) while
+        # bash runs the delete and treats the rest as a comment, so
+        # every token-stage check was defeated at once (verified
+        # against ``_is_dangerous`` before this fix). Retrying with
+        # comments enabled prices the command the way the shell
+        # does; a command that still cannot be tokenized goes to the
+        # loose destructive-marker scan, never to a free pass.
+        try:
+            tokens = shlex.split(command, posix=True, comments=True)
+        except ValueError:
+            return _unparseable_reason(command)
     tokens = _split_shell_operators(tokens)
     # Spaces inside ${...} are part of the expansion, not word
     # separators: the shell reads ${HOME: -11} as one word (the whole
@@ -3159,6 +4140,10 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
             merged.append(tok)
             i += 1
     tokens = merged
+    # Price same-command assignments and default-value expansions
+    # (``T=/; rm -rf $T``, ``rm -rf ${D:-/}``) before the verb checks:
+    # the shell evaluates them first, so the scan does too.
+    tokens = _resolve_simple_assignments(tokens)
     return (_rm_reason(tokens) or _find_reason(tokens)
             or _chmod_reason(tokens) or _raw_device_reason(tokens)
             or _device_wipe_reason(tokens)
@@ -3167,6 +4152,12 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
             or _image_device_reason(tokens)
             or _mtd_device_reason(tokens)
             or _ubi_device_reason(tokens)
+            or _dd_reason(tokens)
+            or _pipe_reason(tokens)
+            or _power_reason(tokens)
+            or _xargs_reason(tokens)
+            or _interpreter_reason(tokens, _depth)
+            or _script_file_reason(tokens, _depth)
             or _nested_reason(tokens, _depth))
 
 
@@ -3314,18 +4305,22 @@ class _RedirectGuard(urllib.request.HTTPRedirectHandler):
         return new_req
 
 
-def _assert_public_host(host: str) -> None:
-    """Refuse loopback/private/link-local/etc. hosts (SSRF guard).
+def _resolve_public_ips(host: str) -> list[str]:
+    """Resolve *host* and return its addresses, all verified public.
 
-    Resolves ``host`` and raises :exc:`ValueError` when any resolved
-    address is non-public, or when the host does not resolve at all.
-    Shared by the ``fetch_url`` tool and the browser engine so both
-    enforce the same boundary.
+    Raises :exc:`ValueError` when the host does not resolve, or when
+    *any* resolved address is loopback / private / link-local /
+    multicast / reserved / unspecified — a name that answers with a
+    mix is refused outright rather than partially trusted. This is
+    the single resolution the SSRF guard validates and the fetch
+    connections pin (see ``_PinnedHTTPConnection``), so the address
+    that was checked is the address that is dialed.
     """
     try:
         infos = socket.getaddrinfo(host, None)
     except socket.gaierror:
         raise ValueError(f"Could not resolve host: {host!r}")
+    ips: list[str] = []
     for _fam, _typ, _proto, _canon, sockaddr in infos:
         ip = ipaddress.ip_address(sockaddr[0])
         if (
@@ -3337,6 +4332,117 @@ def _assert_public_host(host: str) -> None:
             or ip.is_unspecified
         ):
             raise ValueError(f"Refusing non-public address for {host!r} ({ip})")
+        ips.append(sockaddr[0])
+    if not ips:
+        raise ValueError(f"Could not resolve host: {host!r}")
+    return ips
+
+
+def _assert_public_host(host: str) -> None:
+    """Refuse loopback/private/link-local/etc. hosts (SSRF guard).
+
+    Resolves ``host`` and raises :exc:`ValueError` when any resolved
+    address is non-public, or when the host does not resolve at all.
+    Shared by the ``fetch_url`` tool and the browser engine so both
+    enforce the same boundary.
+    """
+    _resolve_public_ips(host)
+
+
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    """An HTTP connection that dials a pre-validated address.
+
+    The hostname is kept on the connection (so the ``Host`` header
+    is the real one); only the TCP target is pinned to
+    ``_pinned_ip`` — an address ``_resolve_public_ips`` returned for
+    this host during this very request. DNS therefore gets no second
+    say between validation and connect, which closes the
+    DNS-rebinding TOCTOU in the old flow (validate one resolution,
+    let urllib resolve again to connect). The connection is only
+    built for direct requests: when a proxy is configured urllib
+    routes through it and name resolution happens at the proxy, as
+    before — the handlers below fall back to the stock classes then.
+    """
+
+    def __init__(self, *args, _pinned_ip: str | None = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._pinned_ip = _pinned_ip
+
+    def connect(self) -> None:
+        self.sock = socket.create_connection(
+            (self._pinned_ip, self.port), self.timeout,
+            self.source_address)
+        self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        if self._tunnel_host:
+            self._tunnel()
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """The HTTPS twin: TLS is wrapped with the real hostname, so
+    SNI and certificate verification check the name the user asked
+    for — only the dialed address is pinned."""
+
+    def __init__(self, *args, _pinned_ip: str | None = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._pinned_ip = _pinned_ip
+
+    def connect(self) -> None:
+        self.sock = socket.create_connection(
+            (self._pinned_ip, self.port), self.timeout,
+            self.source_address)
+        self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        if self._tunnel_host:
+            self._tunnel()
+        if self._context:
+            self.sock = self._context.wrap_socket(
+                self.sock, server_hostname=self.host)
+
+
+def _host_of(host_header: str) -> str:
+    """The bare host of a ``req.host`` value (strips any port and
+    the brackets of an IPv6 literal)."""
+    if host_header.startswith("["):
+        end = host_header.find("]")
+        return host_header[1:end] if end != -1 else host_header
+    return host_header.split(":", 1)[0]
+
+
+def _pinned_factory(conn_class, host_header: str):
+    """A do_open-compatible factory pinning *host_header*'s address.
+
+    Resolution happens here, per request (and therefore per redirect
+    hop): the addresses are re-validated and the first one is pinned
+    into the connection. A validation failure surfaces as the same
+    ValueError ``_validate_url`` raises.
+    """
+    pinned_ip = _resolve_public_ips(_host_of(host_header))[0]
+
+    def factory(host_, timeout=None, **kwargs):
+        return conn_class(host_, timeout=timeout,
+                          _pinned_ip=pinned_ip, **kwargs)
+
+    return factory
+
+
+class _PinnedHTTPHandler(urllib.request.HTTPHandler):
+    """HTTP handler whose connections dial the validated address."""
+
+    def http_open(self, req):
+        if req.has_proxy():
+            return super().http_open(req)
+        return self.do_open(
+            _pinned_factory(_PinnedHTTPConnection, req.host), req)
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    """HTTPS handler whose connections dial the validated address."""
+
+    def https_open(self, req):
+        if req.has_proxy():
+            return super().https_open(req)
+        return self.do_open(
+            _pinned_factory(_PinnedHTTPSConnection, req.host), req,
+            context=self._context, check_hostname=self._check_hostname)
 
 
 def _validate_url(url: str) -> urllib.parse.ParseResult:
@@ -3354,12 +4460,20 @@ def _validate_url(url: str) -> urllib.parse.ParseResult:
 
 
 def _fetch_url(url: str, timeout: int = _FETCH_TIMEOUT) -> dict:
-    """GET a URL and return its text. Size-capped, no credentials in logs."""
+    """GET a URL and return its text. Size-capped, no credentials in logs.
+
+    Connections are pinned to the address the SSRF guard validated
+    (``_PinnedHTTPHandler`` / ``_PinnedHTTPSHandler``): the name is
+    resolved once per request, every answer must be public, and the
+    socket dials that answer — a DNS server that changes its reply
+    between the check and the connect (rebinding) reaches nothing.
+    """
     try:
         _validate_url(url)
     except ValueError as exc:
         return f"ERROR: {exc}"
-    opener = urllib.request.build_opener(_RedirectGuard)
+    opener = urllib.request.build_opener(
+        _RedirectGuard, _PinnedHTTPHandler(), _PinnedHTTPSHandler())
     req = urllib.request.Request(
         url, headers={"User-Agent": "agentkai/0.1 (+local agent)"}
     )
@@ -3396,6 +4510,11 @@ def _fetch_url(url: str, timeout: int = _FETCH_TIMEOUT) -> dict:
         return f"ERROR: HTTP {exc.code} fetching {urllib.parse.urlparse(url).hostname}"
     except urllib.error.URLError as exc:
         return f"ERROR: could not fetch {urllib.parse.urlparse(url).hostname}: {exc.reason}"
+    except ValueError as exc:
+        # The pinned handlers re-validate at connect time; a host
+        # whose answers turned non-public since _validate_url (a
+        # rebinding attempt) is refused with the guard's own message.
+        return f"ERROR: {exc}"
     except (TimeoutError, socket.timeout):
         return f"ERROR: timed out fetching {urllib.parse.urlparse(url).hostname}"
 

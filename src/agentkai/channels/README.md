@@ -31,14 +31,15 @@ channels:
              allowlist: ["123456"], owner_peer: "123456"}
   discord:  {enabled: false, token_env: DISCORD_BOT_TOKEN,
              allowlist: ["789"], owner_peer: "789"}
-  webchat:  {enabled: true, port: 18790, allowlist: ["*"], owner_peer: "local"}
+  webchat:  {enabled: true, port: 18790, allowlist: [], owner_peer: ""}
   whatsapp: {enabled: false, sidecar_url: "http://localhost:18791",
              allowlist: ["+15551234567"], owner_peer: "+15551234567"}
 ```
 
 - **allowlist**: peer ids allowed to talk to the agent. Unknown senders are
-  logged and get no reply. `"*"` allows anyone (only sensible for webchat,
-  which binds 127.0.0.1).
+  logged and get no reply. `"*"` allows anyone — avoid it even for webchat:
+  it binds 127.0.0.1, but any local process or browser page can reach that
+  port and claim any peer id. Every channel ships default-deny (`[]`).
 - **owner_peer**: the owner's id on that channel. The owner may also reply
   `APPROVE <id>` / `DENY <id>` to pending tool approvals.
 - Tokens come from the environment (`token_env`) or `token:` in the file.
@@ -89,10 +90,14 @@ No reply within `approval_timeout` = deny. Non-owners cannot approve.
 
 ### WebChat (built-in)
 
-No setup: enabled by default on `http://127.0.0.1:18790/`. Bound to
-localhost only — it is not reachable from other machines, which is why
-`allowlist: ["*"]` is safe here. Change the port with
-`agentkai gateway --port 8080`.
+Enabled by default on `http://127.0.0.1:18790/`, bound to localhost
+only. The shipped defaults are default-deny like every other channel
+(`allowlist: []`, `owner_peer: ""`): binding to 127.0.0.1 stops other
+*machines*, but any local process — or any web page open in your
+browser — can reach the port and claim any peer id, so a wildcard
+allowlist would let it drive the agent and answer its own approval
+requests. Set `allowlist`/`owner_peer` to the peer id you use before
+chatting. Change the port with `agentkai gateway --port 8080`.
 
 ### WhatsApp (experimental bridge)
 
