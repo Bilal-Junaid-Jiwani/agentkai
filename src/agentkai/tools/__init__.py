@@ -1783,6 +1783,37 @@ def _is_mtd_device_spelling(tok: str) -> bool:
     return False
 
 
+_UBI_NODE = re.compile(r"^/dev/ubi[0-9]+(?:_[0-9]+)?$")
+
+
+def _is_ubi_node_spelling(tok: str) -> bool:
+    """True if *tok* names a UBI device or volume node (``/dev/ubi0``,
+    ``/dev/ubi0_0``) after shell expansion.
+
+    The UBI volume tools take a UBI node, not an MTD node: the
+    ``ubiblock`` read-only block emulation and the ``mtdNro`` nodes
+    are not volume nodes, so neither counts — ``ubiupdatevol
+    /dev/ubiblock0_0`` and ``ubirmvol /dev/mtd0`` both fail in the
+    real tools. Glob spellings are checked against the representative
+    UBI names, the same way ``_is_mtd_device_spelling`` does.
+    """
+    ubi_names = [n for n in _raw_device_names()
+                 if n.startswith("ubi") and not n.startswith("ubiblock")]
+    for expansion in _expand_braces(tok):
+        spell = _normalize_device_spelling(expansion)
+        if not spell:
+            continue
+        if _UBI_NODE.match(spell):
+            return True
+        segments = [s for s in spell.split("/") if s != ""]
+        if len(segments) == 2 and fnmatch.fnmatchcase("dev", segments[0]):
+            name = segments[1]
+            if _has_glob(name) and any(
+                    fnmatch.fnmatchcase(n, name) for n in ubi_names):
+                return True
+    return False
+
+
 def _mtd_device_reason(tokens: list[str]) -> str | None:
     """MTD flash tools erasing or writing a flash device.
 
@@ -1849,6 +1880,123 @@ def _mtd_device_reason(tokens: list[str]) -> str | None:
                     and _is_mtd_device_spelling(operands[1]):
                 return ("flash erase" if operands[0] == "erase"
                         else "flash write")
+    return None
+
+
+def _ubi_device_reason(tokens: list[str]) -> str | None:
+    """UBI volume tools writing to, removing, or tearing down a UBI
+    volume or device.
+
+    The flash tools covered above stop at the MTD layer, but the UBI
+    layer on top of it destroys the same flash data through its own
+    tools — and no pattern or token check knew any of them (verified
+    against ``_is_dangerous`` before this fix). ``ubiupdatevol
+    /dev/ubi0_0 /tmp/image.bin`` writes the image into the volume,
+    overwriting whatever was there (the volume is the first operand;
+    with no image file it reads stdin, and ``-t`` truncates the
+    volume to zero); ``ubirmvol /dev/ubi0 -N rootfs`` removes the
+    volume and its data (the device is the first operand, ``-N`` /
+    ``-n`` name it); ``ubimkvol /dev/ubi0 -N data -s 10MiB`` creates
+    a volume on the device, rewriting its volume table (the device
+    is the first operand; ``-m`` uses the maximum available size,
+    so it is a flag, not a value option); ``ubirsvol /dev/ubi0_0
+    -s 10MiB`` resizes the volume, and an absolute size (or a
+    leading ``-`` one) shrinks it, discarding every block past the
+    new end — the same data loss as ``lvresize``; ``ubidetach -m
+    0`` tears the whole UBI device (and its volumes) down, so every
+    real use blocks, whatever spelling names the target (``-m`` the
+    MTD number, ``-p`` its path, ``-d`` the UBI number, or the UBI
+    device as a positional); ``ubinize -o /dev/sda`` writes the UBI
+    image it builds onto the disk exactly like ``genisoimage -o``
+    already blocked. Only the UBI node counts, so every read form
+    stays allowed: ``ubiattach`` only scans the flash and creates
+    the nodes, ``ubinfo`` / ``ubiinfo`` describe them, ``ubirsvol
+    -s +10MiB`` only grows the volume (the ``lvresize`` rule: with
+    no size given the command errors, so it stays allowed too), a
+    bare ``ubidetach`` errors the same way, ``ubinize -o`` to a
+    regular file is the normal build, and the read-only
+    ``ubiblock`` nodes (``ubiupdatevol /dev/ubiblock0_0``) and a
+    plain MTD node (``ubirmvol /dev/mtd0``) are refused by the real
+    tools. Value options are consumed so their values are never
+    mistaken for the node (``ubimkvol -N`` / ``-s`` / ``-t`` /
+    ``-a``, ``ubirmvol -N`` / ``-n``, ``ubinize -o`` / ``-p`` /
+    ``-m`` / ``-s`` / ``-O``).
+    """
+    for i, tok in enumerate(tokens):
+        name = _basename(tok)
+        args = _args_until_separator(tokens, i + 1)
+        if name == "ubiupdatevol":
+            # [options] <volume-node> [<image-file>]: the volume is
+            # the first operand; the image file is read, so only the
+            # first operand counts. Value options per ubiupdatevol
+            # --help (-s size); -t truncates the volume.
+            operands, _shorts, _longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset("s"),
+                value_longs=frozenset(("size",)))
+            if operands and _is_ubi_node_spelling(operands[0]):
+                return "UBI volume write"
+        elif name == "ubirmvol":
+            # [options] <ubi-device>: the device is the first
+            # operand. Value options per ubirmvol --help (-N name,
+            # -n volume id).
+            operands, _shorts, _longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset("Nn"),
+                value_longs=frozenset(("name", "vol_id")))
+            if operands and _is_ubi_node_spelling(operands[0]):
+                return "UBI volume remove"
+        elif name == "ubimkvol":
+            # [options] <ubi-device>: the device is the first
+            # operand. Value options per ubimkvol --help (-N name,
+            # -s size, -t type, -a alignment); -m is the
+            # max-available-size flag, so it takes no value and a
+            # device after it stays an operand.
+            operands, _shorts, _longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset("Nsta"),
+                value_longs=frozenset(
+                    ("name", "size", "type", "alignment")))
+            if operands and _is_ubi_node_spelling(operands[0]):
+                return "UBI volume create"
+        elif name == "ubirsvol":
+            # [options] <volume-node> -s <size>: the volume is the
+            # first operand. A leading + grows the volume and
+            # destroys nothing; an absolute size or a leading -
+            # shrinks it — the lvresize rule, including staying
+            # allowed with no size given (the command errors).
+            operands, _shorts, _longs, values = _split_tool_args(
+                args, value_shorts=frozenset("s"),
+                value_longs=frozenset(("size",)))
+            if not operands or not _is_ubi_node_spelling(operands[0]):
+                continue
+            for flag, val in values:
+                if flag in ("s", "size") and not val.startswith("+"):
+                    return "UBI volume resize"
+        elif name == "ubidetach":
+            # -m <mtd-num> / -p <path> / -d <ubi-num> / <ubi-device>:
+            # every real use tears the UBI device down. Value
+            # options per ubidetach --help (-m MTD number, -p MTD
+            # path, -d UBI number); a bare invocation errors out,
+            # so it stays allowed, like bare sg_write_same.
+            operands, _shorts, _longs, values = _split_tool_args(
+                args, value_shorts=frozenset("mpd"),
+                value_longs=frozenset(
+                    ("mtdnum", "dev-path", "devn")))
+            if operands or values:
+                return "UBI detach"
+        elif name == "ubinize":
+            # -o <output-file> is the UBI image: writing it onto a
+            # raw device overwrites the disk. Value options per
+            # ubinize --help (-o output, -p peb size, -m min io
+            # size, -s sub-page size, -O VID header offset); only
+            # the -o value counts, the rest are never mistaken for
+            # it.
+            _operands, _shorts, _longs, values = _split_tool_args(
+                args, value_shorts=frozenset("ompseO"),
+                value_longs=frozenset(
+                    ("output", "peb-size", "min-io-size",
+                     "sub-page-size", "vid-hdr-offset")))
+            if any(_is_raw_device_spelling(v)
+                   for flag, v in values if flag in ("o", "output")):
+                return "raw disk write"
     return None
 
 
@@ -2893,7 +3041,13 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     ``flashcp``, ``ubiformat``, ``mtd_debug write`` / ``erase``),
     each keeping its read-only form (``nanddump``, ``mtdinfo``,
     ``flash_info``, ``mtd_debug info`` / ``read``, the read-only
-    ``mtdNro`` nodes) — and the MTD flash devices (``/dev/mtd*`` /
+    ``mtdNro`` nodes) — and the UBI volume tools on top of MTD
+    (``ubiupdatevol`` writing an image into a volume, ``ubirmvol``
+    removing one, ``ubimkvol`` creating one, ``ubirsvol`` shrinking
+    one, ``ubidetach`` tearing the device down, ``ubinize -o``
+    writing its image onto one), each keeping its read-only / grow
+    form (``ubiattach``, ``ubinfo``, ``ubirsvol -s +…``,
+    ``ubinize -o`` to a regular file) — and the MTD flash devices (``/dev/mtd*`` /
     ``mtdblock*`` / ``ubi*``), s390 DASD disks (``/dev/dasd*``)
     and Xen virtual disks (``/dev/xvd*``) as raw-device spellings
     in the copy / wipe / redirect checks — including
@@ -3012,6 +3166,7 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
             or _archive_device_reason(tokens)
             or _image_device_reason(tokens)
             or _mtd_device_reason(tokens)
+            or _ubi_device_reason(tokens)
             or _nested_reason(tokens, _depth))
 
 

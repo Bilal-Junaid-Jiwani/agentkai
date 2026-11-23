@@ -2125,3 +2125,92 @@ def test_exec_blocklist_mtd_flash_device_targets(reg):
                 'mtd_debug erase /tmp/x 0 100',
                 'flash_erase /dev/mtd[0-9]ro 0 5'):
         assert _is_dangerous(cmd) is None, cmd
+
+
+def test_exec_blocklist_ubi_volume_tools(reg):
+    """UBI volume tools writing to, removing, or tearing down a UBI
+    volume or device.
+
+    The flash tools covered above stop at the MTD layer, but the UBI
+    layer on top of it destroys the same flash data through its own
+    tools — and no pattern or token check knew any of them (verified
+    against ``_is_dangerous`` before this fix). ``ubiupdatevol
+    /dev/ubi0_0 /tmp/image.bin`` writes the image into the volume,
+    overwriting whatever was there; ``ubirmvol /dev/ubi0 -N rootfs``
+    removes the volume and its data; ``ubimkvol /dev/ubi0 -N data
+    -s 10MiB`` creates a volume on the device, rewriting its volume
+    table; ``ubirsvol /dev/ubi0_0 -s 10MiB`` resizes it, and an
+    absolute size shrinks it, discarding every block past the new
+    end; ``ubidetach -m 0`` tears the whole UBI device (and its
+    volumes) down; ``ubinize -o /dev/sda`` writes the UBI image it
+    builds onto the disk exactly like ``genisoimage -o``. Blocked
+    cases go through exec (safe: exec blocks them); allowed cases
+    use the pure-function scan, since running them would write the
+    target. Precision is preserved: every read form stays allowed —
+    ``ubiattach`` only scans the flash and creates the nodes,
+    ``ubinfo`` / ``ubiinfo`` describe them — as does a device named
+    only as another option's value (``ubirmvol -N`` is the volume
+    name, ``ubinize -m`` the ini file is not checked, only ``-o``
+    is), the grow form (``ubirsvol -s +10MiB``), the no-size form
+    (``ubirsvol`` errors without ``-s``, the lvresize rule), a bare
+    ``ubidetach`` (it errors too), ``ubinize -o`` to a regular
+    file, and the read-only ``ubiblock`` nodes and plain MTD nodes
+    the real tools refuse.
+    """
+    for cmd in ('ubiupdatevol /dev/ubi0_0 /tmp/image.bin',
+                'ubiupdatevol /dev/ubi0_0',
+                'ubiupdatevol /dev/ubi0_0 -t',
+                'ubiupdatevol -s 100 /dev/ubi0_0 /tmp/image.bin',
+                'ubiupdatevol /dev/ubi0_0 /dev/sda',
+                'ubiupdatevol /dev/ubi[0-9]_0 /tmp/image.bin',
+                'ubiupdatevol /dev/ubi0_0 /tmp/image.bin; echo done',
+                "bash -c 'ubiupdatevol /dev/ubi0_0 /tmp/image.bin'",
+                'sudo ubiupdatevol /dev/ubi0_0 /tmp/image.bin',
+                '/usr/sbin/ubiupdatevol /dev/ubi0_0 /tmp/image.bin',
+                'ubirmvol /dev/ubi0 -N rootfs',
+                'ubirmvol /dev/ubi0 -n 0',
+                'ubirmvol --name=rootfs /dev/ubi0',
+                'ubirmvol -Nrootfs /dev/ubi0',
+                'ubimkvol /dev/ubi0 -N data -s 10MiB',
+                'ubimkvol /dev/ubi0 -N data -s 10MiB -t static',
+                'ubimkvol -m /dev/ubi0 -N data',
+                'ubimkvol /dev/ubi0 -N data --size=10MiB',
+                'ubirsvol /dev/ubi0_0 -s 10MiB',
+                'ubirsvol /dev/ubi0_0 --size=10MiB',
+                'ubirsvol /dev/ubi0_0 -s -10MiB',
+                'ubidetach -m 0',
+                'ubidetach -p /dev/mtd0',
+                'ubidetach -m 0 -d 0',
+                'ubidetach /dev/ubi0',
+                'ubinize -o /dev/sda ubi.ini',
+                'ubinize --output=/dev/sda ubi.ini',
+                'ubinize -o /dev/ubi0_0 ubi.ini'):
+        result = reg.get("exec").run(command=cmd)
+        assert isinstance(result, str), cmd
+        assert result.startswith("ERROR:") and "blocked" in result, cmd
+    from agentkai.tools import _is_dangerous
+    for cmd in ('ubiattach -m 0',
+                'ubiattach -p /dev/mtd0',
+                'ubinfo /dev/ubi0',
+                'ubinfo -a',
+                'ubiinfo /dev/ubi0_0',
+                'ubiupdatevol --help',
+                'ubirmvol --help',
+                'ubimkvol --help',
+                'ubirsvol --help',
+                'ubidetach --help',
+                'ubinize --help',
+                'ubiupdatevol /tmp/vol /tmp/image.bin',
+                'ubirmvol /tmp/ubi0 -N rootfs',
+                'ubimkvol /tmp/ubi0 -N data -s 10MiB',
+                'ubirsvol /tmp/ubi0_0 -s 10MiB',
+                'ubirsvol /dev/ubi0_0 -s +10MiB',
+                'ubirsvol /dev/ubi0_0 --size=+10MiB',
+                'ubirsvol /dev/ubi0_0',
+                'ubidetach',
+                'ubinize -o /tmp/ubi.img ubi.ini',
+                'ubinize -o /tmp/ubi.img -p 131072 ubi.ini',
+                'ubiupdatevol /dev/ubiblock0_0 /tmp/image.bin',
+                'ubirmvol /dev/mtd0 -N rootfs',
+                'ubimkvol /dev/mtd0 -N data -s 10MiB'):
+        assert _is_dangerous(cmd) is None, cmd

@@ -22,7 +22,7 @@ from .subagents import (
     scoped_registry,
 )
 
-__version__ = "0.6.38"
+__version__ = "0.6.39"
 
 __all__ = [
     "Agent",

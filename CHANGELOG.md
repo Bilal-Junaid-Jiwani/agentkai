@@ -3,6 +3,39 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.39] - 2026-11-23
+
+### Fixed
+- **Exec blocklist: UBI volume tools destroying flash data slipped
+  past unchecked.** The flash tools covered in 0.6.38 stop at the
+  MTD layer, but the UBI layer on top of it destroys the same flash
+  data through its own tools — and no pattern or token check knew
+  any of them. `ubiupdatevol /dev/ubi0_0 image.bin` writes the image
+  into the volume, overwriting whatever was there (with no image
+  file it reads stdin, and `-t` truncates the volume to zero);
+  `ubirmvol /dev/ubi0 -N rootfs` removes the volume and its data
+  (the device is the first operand, `-N` / `-n` name it);
+  `ubimkvol /dev/ubi0 -N data -s 10MiB` creates a volume on the
+  device, rewriting its volume table (the device is the first
+  operand; `-m` uses the maximum available size, so it is a flag,
+  not a value option); `ubirsvol /dev/ubi0_0 -s 10MiB` resizes the
+  volume, and an absolute size (or a leading `-` one) shrinks it,
+  discarding every block past the new end; `ubidetach -m 0` tears
+  the whole UBI device (and its volumes) down, whatever spelling
+  names the target (`-m` the MTD number, `-p` its path, `-d` the
+  UBI number, or the UBI device as a positional); `ubinize -o
+  /dev/sda` writes the UBI image it builds onto the disk exactly
+  like the already-blocked `genisoimage -o`. Precision is
+  preserved: every read form stays allowed (`ubiattach` only scans
+  the flash and creates the nodes, `ubinfo` / `ubiinfo` describe
+  them), as does the grow form (`ubirsvol -s +10MiB`), the no-size
+  form (`ubirsvol` without `-s` errors, the `lvresize` rule), a
+  bare `ubidetach` (it errors too), `ubinize -o` to a regular file,
+  and the read-only `ubiblock` nodes (`ubiupdatevol
+  /dev/ubiblock0_0`) and plain MTD nodes (`ubirmvol /dev/mtd0`)
+  the real tools refuse. New test pins the blocked spellings (28
+  cases) and the allowed ones (24 cases).
+
 ## [0.6.38] - 2026-11-22
 
 ### Fixed
