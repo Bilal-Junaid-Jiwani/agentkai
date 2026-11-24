@@ -342,8 +342,12 @@ def test_exec_blocklist_chmod_permission_nuke(reg):
     The old pattern required trailing whitespace after "/", so the
     plain "chmod -R 777 /" (end of command) and "chmod -R 777 /; ..."
     slipped past it, as did --recursive / combined -Rf flag spellings.
-    Precision is preserved: 777 on a non-root dir and non-777 modes
-    on / stay allowed.
+    0.6.41 tightened this further: a recursive chmod of ANY guarded
+    dir is refused whatever the mode (it rewrites the whole tree's
+    modes), so "chmod -R 755 /" and "chmod -R 777 /home" moved from
+    the allowed list to the blocked list. Precision is preserved:
+    777 on a non-guarded dir, non-777 modes on /, and recursive
+    chmod of a guarded dir's subdirectory stay allowed.
     """
     for cmd in ("chmod -R 777 /",
                 "chmod -R 777 /; echo done",
@@ -352,7 +356,9 @@ def test_exec_blocklist_chmod_permission_nuke(reg):
                 "chmod --recursive 777 /",
                 "chmod -Rf 777 /",
                 "chmod -R 0777 /",
-                "chmod -R 777 //"):
+                "chmod -R 777 //",
+                "chmod -R 755 /",
+                "chmod -R 777 /home"):
         result = reg.get("exec").run(command=cmd)
         assert isinstance(result, str), cmd
         assert result.startswith("ERROR:") and "blocked" in result, cmd
@@ -360,9 +366,99 @@ def test_exec_blocklist_chmod_permission_nuke(reg):
     # would actually chmod the target.
     from agentkai.tools import _is_dangerous
     for cmd in ("chmod -R 777 /tmp",
-                "chmod -R 777 /home",
-                "chmod -R 755 /",
+                "chmod 755 /",
                 "chmod -R 777 /home/shared"):
+        assert _is_dangerous(cmd) is None, cmd
+
+
+def test_blocklist_guarded_tree_permission_nukes():
+    """0.6.41: recursive chown/chgrp/chmod and nuke-mode chmod of a
+    guarded dir, and chattr +i on one.
+
+    The scan refused a recursive delete of ``/`` / a home / a named
+    system tree and a permission nuke of ``/`` itself, but the same
+    destruction spelled as an ownership or permission change of any
+    other guarded dir passed: ``chown -R nobody /etc`` re-owns a
+    whole system tree (the audit's hardening note 1), ``chmod -R 755
+    /`` rewrites every mode in the tree, ``chmod 700 /etc`` locks
+    every other account out of it, and ``chattr +i /etc`` makes the
+    tree immutable (all verified against ``_is_dangerous`` before the
+    fix). All cases use the pure-function scan: running the allowed
+    ones through exec would actually change the target. Precision
+    follows the rm guard: subdirectories stay allowed, as do
+    non-recursive single-file chown/chmod, harmless modes (``755``),
+    and the standard secure modes on a home (``700 ~``).
+    """
+    from agentkai.tools import _is_dangerous
+    for cmd in ("chown -R nobody /",
+                "chown -R nobody /etc",
+                "chown -R nobody /home",
+                "chown --recursive nobody /usr",
+                "chown -Rf nobody /etc/",
+                "chown nobody -R /etc",
+                "chgrp -R nogroup /",
+                "chgrp -R nogroup /home",
+                "sudo chown -R nobody /etc",
+                "/bin/chown -R nobody /etc",
+                "chown -R --from=old nobody /etc",
+                "chmod -R 777 /etc",
+                "chmod -R 000 /var",
+                "chmod -R 755 /",
+                "chmod -R 755 /home",
+                "chmod --recursive 755 /etc",
+                "chmod 755 -R /etc",
+                "chmod -R a+rwx /etc",
+                "chmod 777 /etc",
+                "chmod 000 /etc",
+                "chmod 700 /etc",
+                "chmod 644 /etc",
+                "chmod 750 /etc",
+                "chmod 600 /usr",
+                "chmod a+rwx /etc",
+                "chmod o+w /etc",
+                "chmod o-x /etc",
+                "chmod o-rwx /etc",
+                "chmod a-rwx /etc",
+                "chmod a= /etc",
+                "chmod u=,o=u /etc",
+                "chmod 777 /home",
+                "chmod 000 /home",
+                "chattr +i /etc",
+                "chattr -R +i /",
+                "chattr +i /home",
+                "chattr =i /etc",
+                "chattr -RV +i /etc"):
+        assert _is_dangerous(cmd) is not None, cmd
+    for cmd in ("chown -R www-data /var/www/myapp",
+                "chown -R nobody /home/user/project",
+                "chown root:root /etc/passwd",
+                "chown -R nobody /tmp/x",
+                "chgrp -R staff /home/user/project",
+                "chmod -R 777 /tmp",
+                "chmod -R 755 /etc/myapp",
+                "chmod -R 777 /var/tmp/scratch",
+                "chmod -R 755 /home/user/project",
+                "chmod 755 /etc",
+                "chmod 751 /etc",
+                "chmod 700 /home/hatch",
+                "chmod 750 /home/hatch",
+                "chmod 755 /home/hatch",
+                "chmod 700 ~",
+                "chmod 600 /home/hatch/.ssh/id_rsa",
+                "chmod u+rwx /",
+                "chmod g+rwx /",
+                "chmod o+r /",
+                "chmod +rwx /",
+                "chmod a+rwx,o-w /",
+                "chmod o+w,o-w /",
+                "chmod 0755 /",
+                "chmod 0775 /",
+                "chmod o= /home/hatch",
+                "chmod a+rwx /tmp",
+                "chattr +i /tmp/x",
+                "chattr -i /etc",
+                "chattr -R -i /etc",
+                "chattr +a /etc/passwd"):
         assert _is_dangerous(cmd) is None, cmd
 
 
@@ -372,13 +468,15 @@ def test_exec_blocklist_chmod_equivalent_mode_spellings():
     Numeric: leading zeros (00777) and the special-bit digit (4777,
     7777, 1777, 07777) spell the same 777 mode the old pattern only
     matched as 777/0777. Symbolic: a+rwx, a=rwx, u=rwx,g=rwx,o=rwx,
-    go+rwx, o+rwx and plain o+w all leave / world-writable.
-    Precision is preserved: non-777 modes on /, 777-class modes on
-    non-root dirs, owner/group-only grants, read-only grants to other,
-    the umask-masked bare +rwx (other gains r-x, not w, like the
-    allowed 755 /), and clauses that take other's write back off
-    (a+rwx,o-w) stay allowed. All cases via the pure-function scan:
-    running the blocked ones through exec would be safe, but the
+    go+rwx, o+rwx and plain o+w all leave / world-writable. 0.6.41:
+    the same symbolic nuke on a guarded dir other than / (``a+rwx
+    /home``) is refused too — it moved from the allowed list to the
+    blocked list. Precision is preserved: non-777 modes on /, 777-class
+    modes on non-guarded dirs, owner/group-only grants, read-only
+    grants to other, the umask-masked bare +rwx (other gains r-x, not
+    w, like the allowed 755 /), and clauses that take other's write
+    back off (a+rwx,o-w) stay allowed. All cases via the pure-function
+    scan: running the blocked ones through exec would be safe, but the
     allowed ones would actually chmod the target.
     """
     from agentkai.tools import _is_dangerous
@@ -395,13 +493,13 @@ def test_exec_blocklist_chmod_equivalent_mode_spellings():
                 "chmod o+rwx /",
                 "chmod o+w /",
                 "chmod o=u /",
+                "chmod a+rwx /home",
                 "/bin/chmod a+rwx /"):
         assert _is_dangerous(cmd) is not None, cmd
     for cmd in ("chmod 0775 /",
                 "chmod 0755 /",
                 "chmod 777 /tmp",
                 "chmod a+rwx /tmp",
-                "chmod a+rwx /home",
                 "chmod u+rwx /",
                 "chmod g+rwx /",
                 "chmod o+r /",
@@ -2408,6 +2506,49 @@ def test_blocklist_newly_covered_device_tools():
                 "badblocks /dev/sda",
                 "sg_dd if=/dev/sda of=/tmp/x",
                 "lvresize -L +1G"):
+        assert _is_dangerous(cmd) is None, cmd
+
+
+def test_blocklist_device_writes_truncate_fallocate_wipe():
+    """0.6.41: truncate / fallocate -l onto a raw device, wipe/srm of one.
+
+    The scan blocked ``cp``/``dd``/``shred`` writes to a raw device,
+    but the same write spelled as ``truncate -s 0 /dev/sda`` (sets
+    the device's size), ``fallocate -l 1G /dev/sda`` (reserves space
+    on it), ``wipe /dev/sda`` or ``srm /dev/sda`` (secure-delete
+    tools, the same class as the already-blocked ``shred``) matched
+    no pattern or token check (verified against ``_is_dangerous``
+    before the fix). All cases via the pure-function scan: running
+    the allowed ones through exec would actually write the target.
+    Precision is preserved: truncating / allocating / wiping a
+    regular file stays allowed, ``truncate -r`` only reads its
+    reference file (a device there is a read, not a write), and a
+    bare ``fallocate`` with no length or discard flag still errors
+    out harmlessly on its own.
+    """
+    from agentkai.tools import _is_dangerous
+    for cmd in ("truncate -s 0 /dev/sda",
+                "truncate -s 1G /dev/sda",
+                "truncate --size=0 /dev/sda",
+                "truncate -s0 /dev/sda",
+                "truncate --size 0 /dev/nvme0n1",
+                "fallocate -l 1G /dev/sda",
+                "fallocate --length 1G /dev/sda",
+                "fallocate -l1G /dev/sda",
+                "wipe /dev/sda",
+                "wipe -f /dev/sda",
+                "srm /dev/sda",
+                "srm -r /dev/sda"):
+        assert _is_dangerous(cmd) is not None, cmd
+    for cmd in ("truncate -s 0 /tmp/x",
+                "truncate -s 1M /tmp/sparse.img",
+                "truncate --size=0 /tmp/x",
+                "truncate -r /dev/sda /tmp/x",
+                "fallocate -l 1G /tmp/file",
+                "fallocate /dev/sda",
+                "wipe /tmp/file",
+                "srm /tmp/file",
+                "wipefs /dev/null"):
         assert _is_dangerous(cmd) is None, cmd
 
 

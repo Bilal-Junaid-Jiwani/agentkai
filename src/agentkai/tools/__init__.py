@@ -1166,30 +1166,23 @@ def _resolve_simple_assignments(tokens: list[str]) -> list[str]:
 _SYMBOLIC_CLAUSE = re.compile(r"^([ugoa]*)([+-=])([rwxXstugo]*)$")
 
 
-def _chmod_symbolic_nukes_root(mode: str) -> bool:
-    """True if symbolic *mode* leaves ``/`` world-writable.
+def _chmod_symbolic_dir_perms(mode: str) -> dict[str, set[str]] | None:
+    """End-state permissions of a directory after symbolic *mode*.
 
-    The numeric pattern above catches ``777`` in any octal spelling,
-    but the symbolic spellings of the same mode slipped past it:
-    ``chmod a+rwx /``, ``a=rwx /`` and ``u=rwx,g=rwx,o=rwx /`` all
-    make root world-writable, as do ``go+rwx /`` (root's owner already
-    has full access) and plain ``o+w /``. The rule is the end state,
-    not any single clause: clauses apply in order (``a+rwx,o-w /``
-    takes the write bit back off other, so it stays allowed), ``=``
-    replaces a class's bits, and ``-`` can only remove. Copy letters
-    (``o=u``) grant the source class's usual bits on ``/`` — owner
-    root has rwx, group root has r-x. An empty who (``+rwx``) is
-    umask-masked in the shell, so with the standard 022 umask other
-    gains r-x but not w, and it stays allowed, exactly like the
-    allowed ``755 /``. ``s``/``t`` grant no write and are ignored;
-    ``X`` on a directory behaves as ``x``. A non-symbolic mode
-    (``777``, ``--help``) returns False: the numeric pattern owns it.
+    Clauses apply in order from the directory's usual starting mode
+    (755: owner rwx, group/other r-x) — ``=`` replaces a class's bits,
+    ``+`` adds, ``-`` removes; an empty who is umask-masked (022), so
+    it grants no write to group/other; copy letters (``o=u``) grant
+    the source class's *current* bits. ``s``/``t`` grant no write and
+    are ignored; ``X`` on a directory behaves as ``x``. Returns None
+    for a mode that is not symbolic at all (``777``, ``--help``).
     """
-    perms: dict[str, set[str]] = {"u": set(), "g": set(), "o": set()}
+    perms: dict[str, set[str]] = {"u": {"r", "w", "x"},
+                                  "g": {"r", "x"}, "o": {"r", "x"}}
     for clause in mode.split(","):
         m = _SYMBOLIC_CLAUSE.match(clause)
         if not m:
-            return False
+            return None
         who, op, letters = m.groups()
         if "a" in who:
             classes = {"u", "g", "o"}
@@ -1205,9 +1198,11 @@ def _chmod_symbolic_nukes_root(mode: str) -> bool:
             elif ch == "X":
                 granted.add("x")  # target is a dir, so X behaves as x
             elif ch == "u":
-                granted.update("rwx")
-            elif ch in "go":
-                granted.update("rx")
+                granted.update(perms["u"])
+            elif ch == "g":
+                granted.update(perms["g"])
+            elif ch == "o":
+                granted.update(perms["o"])
             # "s"/"t": setuid/setgid/sticky — no write grant, ignored
         for c in classes:
             grant = set(granted)
@@ -1217,9 +1212,32 @@ def _chmod_symbolic_nukes_root(mode: str) -> bool:
                 perms[c] = grant
             elif op == "+":
                 perms[c] |= grant
-            else:  # "-": removal can only take write away
+            else:  # "-": removal can only take bits away
                 perms[c] -= grant
-    return "w" in perms["o"]
+    return perms
+
+
+def _chmod_symbolic_nukes_root(mode: str) -> bool:
+    """True if symbolic *mode* leaves ``/`` world-writable.
+
+    The numeric pattern above catches ``777`` in any octal spelling,
+    but the symbolic spellings of the same mode slipped past it:
+    ``chmod a+rwx /``, ``a=rwx /`` and ``u=rwx,g=rwx,o=rwx /`` all
+    make root world-writable, as do ``go+rwx /`` (root's owner already
+    has full access) and plain ``o+w /``. The rule is the end state,
+    not any single clause: clauses apply in order (``a+rwx,o-w /``
+    takes the write bit back off other, so it stays allowed), ``=``
+    replaces a class's bits, and ``-`` can only remove. Copy letters
+    (``o=u``) grant the source class's current bits — owner root has
+    rwx, group root has r-x. An empty who (``+rwx``) is umask-masked
+    in the shell, so with the standard 022 umask other gains r-x but
+    not w, and it stays allowed, exactly like the allowed ``755 /``.
+    ``s``/``t`` grant no write and are ignored; ``X`` on a directory
+    behaves as ``x``. A non-symbolic mode (``777``, ``--help``)
+    returns False: the numeric pattern owns it.
+    """
+    perms = _chmod_symbolic_dir_perms(mode)
+    return perms is not None and "w" in perms["o"]
 
 
 def _chmod_reason(tokens: list[str]) -> str | None:
@@ -1260,6 +1278,218 @@ def _chmod_reason(tokens: list[str]) -> str | None:
             root = target.strip("\"'").rstrip(";&|").rstrip("/")
             if target and root == "":
                 return "permission nuke"
+    return None
+
+
+def _target_is_home(tok: str) -> bool:
+    """True if *tok* names a home directory (literal, brace or glob
+    spelling, or a symlink landing on one).
+
+    Used by the chmod mode check below: ``700``/``750`` on a home is
+    the standard secure setting, not a lockout — the same mode on a
+    shared system tree locks every other account out of it, so the
+    two need telling apart. A glob that can match a home counts as a
+    home (``chmod 700 /home/*`` secures every home); anything that
+    cannot be classified as a home is priced as a system tree.
+    """
+    t = tok.strip("\"'")
+    if not t:
+        return False
+    homes = _home_dirs()
+    for expansion in _expand_braces(t):
+        spell = _normalize_path_spelling(expansion)
+        if not spell:
+            continue
+        base = spell.rstrip("/") or "/"
+        if base in homes:
+            return True
+        if _has_glob(spell) and any(
+                fnmatch.fnmatchcase(h, spell) for h in homes):
+            return True
+    resolved = _realpath_of(tok)
+    return resolved is not None and resolved in homes
+
+
+def _chmod_mode_nukes_dir(mode: str, target: str) -> bool:
+    """True if chmod *mode* wrecks guarded dir *target* in one shot.
+
+    Three end states count as a nuke, judged on the mode's last three
+    digits (numeric) or its evaluated end state (symbolic, from the
+    directory's usual 755 start):
+
+    - world-writable: other gains ``w`` (``777``, ``a+rwx``, ``o+w``)
+      — the already-blocked ``/`` case, now for every guarded dir;
+    - owner locked out: the owner class ends without ``x``
+      (``000``, ``644``, ``u-x``) — the owner cannot traverse their
+      own directory any more, so the tree is bricked for them too;
+    - others locked out of a shared tree: other ends without ``x``
+      (``700``, ``750``, ``o-x``) on a system tree — every other
+      account loses the tree. The same mode on a *home* is the
+      standard secure setting (``700 ~``), so homes are exempt from
+      this leg only.
+
+    ``755``/``751``/``u+rwx``/``o+r`` and the other harmless modes
+    stay allowed, as does any mode on a non-guarded dir. A mode that
+    is neither numeric nor symbolic (``--help``) is not a nuke.
+    """
+    home = _target_is_home(target)
+    if re.fullmatch(r"[0-7]{1,4}", mode):
+        digits = mode[-3:].rjust(3, "0")
+        u, _g, o = (int(d) for d in digits)
+        if o & 0b010:
+            return True  # world-writable
+        if not u & 0b001:
+            return True  # owner locked out of their own dir
+        if not home and not o & 0b001:
+            return True  # others locked out of a shared tree
+        return False
+    perms = _chmod_symbolic_dir_perms(mode)
+    if perms is None:
+        return False
+    if "w" in perms["o"]:
+        return True
+    if "x" not in perms["u"]:
+        return True
+    if not home and "x" not in perms["o"]:
+        return True
+    return False
+
+
+def _tree_permission_reason(tokens: list[str]) -> str | None:
+    """``chown``/``chgrp``/``chmod``/``chattr`` rewriting a guarded tree.
+
+    The blocklist already refused a recursive delete of ``/``, a home
+    or a named system tree, and a permission nuke of ``/`` itself —
+    but the same destruction spelled as an ownership or permission
+    change of any other guarded dir sailed through (verified against
+    ``_is_dangerous`` before this fix):
+
+    - ``chown -R nobody /etc`` / ``chgrp -R nogroup /`` re-own a
+      whole system tree (the audit's hardening note 1 named
+      ``chown -R nobody /`` explicitly); ``chmod -R 755 /`` rewrites
+      every mode in the tree — private keys world-readable, setuid
+      bits stripped — and ``chmod -R 777 /etc`` / ``-R 000 /var``
+      open or lock a whole tree the same way. Any recursive
+      chown/chgrp/chmod of a guarded dir is refused, whatever the
+      mode or owner: the tree-wide rewrite is the damage.
+    - A single (non-recursive) chmod of a guarded dir with a nuke
+      mode — world-writable (``777``, ``a+rwx``), owner locked out
+      (``000``, ``644``), or others locked out of a shared tree
+      (``700``/``750``/``o-x`` on ``/etc``) — is refused the same
+      way ``chmod 777 /`` already was.
+    - ``chattr +i`` on a guarded dir makes the tree immutable —
+      nothing inside it can ever change again — so it is refused
+      too, recursive or not (``-i`` only removes the flag, so it
+      stays allowed).
+
+    Precision follows the rm guard exactly: subdirectories stay the
+    caller's responsibility (``chmod -R 777 /etc/myapp``,
+    ``chown -R www-data /var/www/site``, ``chattr +i /tmp/x``),
+    non-recursive single-file chown/chmod (``chown root /etc/passwd``,
+    ``chmod 600 ~/.ssh/id_rsa``) and harmless modes (``755``,
+    ``700 ~``) stay allowed. Verbs are matched by basename, so
+    ``/bin/chmod`` and ``sudo chown`` are caught too; ``--reference``
+    modes are unpriceable, so only the recursive rule applies there.
+    """
+    for i, tok in enumerate(tokens):
+        name = _basename(tok)
+        if name not in ("chown", "chgrp", "chmod", "chattr"):
+            continue
+        args = _args_until_separator(tokens, i + 1)
+        # GNU tools permute options, so -R/--recursive counts wherever
+        # it appears before the -- terminator — not just ahead of the
+        # mode/owner (``chmod 755 -R /etc`` recurses like ``-R`` first).
+        recursive = False
+        for arg in args:
+            if arg == "--":
+                break
+            if arg == "--recursive":
+                recursive = True
+                break
+            if (arg.startswith("-") and arg != "-"
+                    and not arg.startswith("--") and "R" in arg[1:]):
+                recursive = True
+                break
+        if name in ("chown", "chgrp"):
+            j = 0
+            while j < len(args):
+                arg = args[j]
+                if arg == "--":
+                    j += 1
+                    break
+                if arg.startswith("--"):
+                    if arg in ("--from", "--reference"):
+                        j += 1  # skip the option's value
+                    j += 1
+                    continue
+                if arg.startswith("-") and arg != "-":
+                    j += 1
+                    continue
+                break
+            operands = args[j:]
+            if operands:
+                operands = operands[1:]  # owner (chown) / group (chgrp)
+            if recursive and any(
+                    _is_root_or_home(t) or _realpath_is_guarded(t)
+                    for t in operands):
+                return "recursive ownership change of a guarded directory"
+            continue
+        if name == "chmod":
+            reference = False
+            j = 0
+            while j < len(args):
+                arg = args[j]
+                if arg == "--":
+                    j += 1
+                    break
+                if arg.startswith("--"):
+                    if arg == "--reference":
+                        reference = True
+                        j += 1  # skip the option's value
+                    j += 1
+                    continue
+                if arg.startswith("-") and arg != "-":
+                    j += 1
+                    continue
+                break
+            if j >= len(args):
+                continue
+            if reference:
+                # Mode comes from the reference file: unpriceable
+                # here, so only the tree-wide rewrite is priced.
+                if recursive and any(
+                        _is_root_or_home(t) or _realpath_is_guarded(t)
+                        for t in args[j:]):
+                    return "recursive permission change of a guarded directory"
+                continue
+            mode = args[j]
+            targets = [t for t in args[j + 1:]
+                       if not t.startswith("-")]
+            if not targets:
+                continue
+            if recursive and any(
+                    _is_root_or_home(t) or _realpath_is_guarded(t)
+                    for t in targets):
+                return "recursive permission change of a guarded directory"
+            for target in targets:
+                if (_is_root_or_home(target)
+                        or _realpath_is_guarded(target)) \
+                        and _chmod_mode_nukes_dir(mode, target):
+                    return "permission nuke of a guarded directory"
+            continue
+        # chattr: the op is the first operand (+i / -i / =i); -p/-v
+        # take values, the rest are flags. Only adding the immutable
+        # bit locks a tree, and only a guarded dir counts as one.
+        operands, _shorts, _longs, _vals = _split_tool_args(
+            args, value_shorts=frozenset("pv"))
+        if not operands:
+            continue
+        op = operands[0]
+        if len(op) < 2 or op[0] not in "+=" or "i" not in op[1:]:
+            continue
+        if any(_is_root_or_home(t) or _realpath_is_guarded(t)
+               for t in operands[1:]):
+            return "immutable flag on a guarded directory"
     return None
 
 
@@ -1680,17 +1910,19 @@ def _raw_device_reason(tokens: list[str]) -> str | None:
 
 # Commands whose entire purpose is overwriting or erasing their target:
 # ``shred`` writes over it, ``wipefs`` strips its filesystem signatures,
-# ``blkdiscard`` discards its blocks. Aimed at a raw disk or memory
+# ``blkdiscard`` discards its blocks, ``wipe`` overwrites it securely
+# and ``srm`` is the secure-delete ``rm``. Aimed at a raw disk or memory
 # device, each destroys it exactly like the ``dd``/``cp`` writes above
-# — but none matched any pattern or token check (verified against
-# ``_is_dangerous`` before this fix). Only raw-device targets count:
-# ``shred /tmp/file`` and ``wipefs /dev/null`` stay allowed, as does
-# every flag spelling (value words such as ``shred -n 1``'s ``1`` are
-# harmless operands that never match the device pattern).
+# — but ``wipe``/``srm`` matched no pattern or token check (verified
+# against ``_is_dangerous`` before this fix). Only raw-device targets
+# count: ``shred /tmp/file`` and ``wipefs /dev/null`` stay allowed, as
+# does every flag spelling (value words such as ``shred -n 1``'s ``1``
+# are harmless operands that never match the device pattern).
 def _device_wipe_reason(tokens: list[str]) -> str | None:
-    """``shred``/``wipefs``/``blkdiscard`` aimed at a raw device."""
+    """``shred``/``wipefs``/``blkdiscard``/``wipe``/``srm`` aimed at a raw device."""
     for i, tok in enumerate(tokens):
-        if _basename(tok) not in ("shred", "wipefs", "blkdiscard"):
+        if _basename(tok) not in ("shred", "wipefs", "blkdiscard",
+                                  "wipe", "srm"):
             continue
         args = _args_until_separator(tokens, i + 1)
         operands: list[str] = []
@@ -3170,19 +3402,39 @@ def _format_device_reason(tokens: list[str]) -> str | None:
             # disk's blocks exactly like the already-blocked
             # ``blkdiscard`` — but no check knew the spelling
             # (verified against ``_is_dangerous`` before this fix).
-            # A plain fallocate only reserves space, and the discard
-            # modes on a regular file are ordinary file work, so both
-            # stay allowed. Value options per fallocate --help (-l
-            # length, -o offset).
+            # The same hole stayed open for a plain allocation: ``-l``
+            # / ``--length`` reserves space on the target, which on a
+            # raw device is a write to the disk like ``dd`` — also
+            # verified against ``_is_dangerous`` before this fix. A
+            # plain fallocate only reserves space, and the discard and
+            # allocation modes on a regular file are ordinary file
+            # work, so both stay allowed. Value options per fallocate
+            # --help (-l length, -o offset). A symlink landing on a
+            # device counts too, like the scrub branch below.
             operands, shorts, longs, _vals = _split_tool_args(
                 args, value_shorts=frozenset("lo"),
                 value_longs=frozenset(("length", "offset")))
-            if not (shorts & {"z", "p", "c"}
-                    or longs & {"zero-range", "punch-hole",
-                                "collapse-range"}):
+            discard = shorts & {"z", "p", "c"} or longs & {
+                "zero-range", "punch-hole", "collapse-range"}
+            allocate = "l" in shorts or "length" in longs
+            if not (discard or allocate):
                 continue
-            if any(_is_raw_device_spelling(o) for o in operands):
-                return "raw device discard"
+            if any(_is_device_target(o) for o in operands):
+                return ("raw device discard" if discard
+                        else "raw disk write")
+        elif name == "truncate":
+            # -s/--size sets the target's size: on a raw device that
+            # is a write to the disk exactly like ``dd of=`` — but no
+            # check knew the tool (verified against ``_is_dangerous``
+            # before this fix). Truncating a regular file is ordinary
+            # file work and stays allowed. -r/--reference only names
+            # the file whose size is copied, so its value is consumed
+            # as a value and never mistaken for a target.
+            operands, _shorts, _longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset("sr"),
+                value_longs=frozenset(("size", "reference")))
+            if any(_is_device_target(o) for o in operands):
+                return "raw disk write"
         elif name == "scrub":
             # scrub writes pattern passes over its target file: on a
             # raw device that is a full-disk overwrite, the same write
@@ -4145,7 +4397,8 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     # the shell evaluates them first, so the scan does too.
     tokens = _resolve_simple_assignments(tokens)
     return (_rm_reason(tokens) or _find_reason(tokens)
-            or _chmod_reason(tokens) or _raw_device_reason(tokens)
+            or _chmod_reason(tokens) or _tree_permission_reason(tokens)
+            or _raw_device_reason(tokens)
             or _device_wipe_reason(tokens)
             or _format_device_reason(tokens)
             or _archive_device_reason(tokens)

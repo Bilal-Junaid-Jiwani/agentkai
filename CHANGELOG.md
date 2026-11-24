@@ -3,6 +3,51 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.41] - 2026-11-24
+
+### Fixed
+- **Exec blocklist: ownership/permission nukes of a guarded tree and
+  the last device-write spellings slipped past it.** The audit round
+  in 0.6.40 closed the delete/device classes, but the same
+  destruction spelled as an ownership or permission change of a
+  guarded dir — or as a truncate/allocate/wipe of a raw device —
+  still passed the scan. Every bypass below was reproduced against
+  the old checker with pure-function verdict calls before the fix,
+  and each is pinned by a new regression test; benign controls
+  (subdir targets, single-file chown/chmod, ``700 ~``,
+  ``truncate``/``fallocate``/``wipe`` of regular files) are pinned
+  too, and the full suite is green.
+- **Recursive ownership/permission rewrites of guarded trees.**
+  ``chown -R nobody /etc``, ``chgrp -R nogroup /`` and
+  ``chmod -R 755 /`` rewrite a whole system tree in one command
+  (the audit's hardening note 1 named ``chown -R nobody /``
+  explicitly) — any recursive chown/chgrp/chmod of ``/``, a home,
+  the homes' parent or a named system tree is now refused, whatever
+  the mode or owner, including ``--recursive`` spellings and options
+  permuted after the mode (``chmod 755 -R /etc``). Subdirectories
+  (``/etc/myapp``, ``/var/www/site``, ``~/project``) stay allowed,
+  exactly like the rm guard.
+- **Single chmod nukes of a guarded dir.** ``chmod 777 /etc``,
+  ``chmod 000 /etc`` and ``chmod 700 /etc`` (world-writable, owner
+  locked out, others locked out of a shared tree) are refused for
+  every guarded dir, not just ``/`` — numeric and symbolic modes
+  alike (``a+rwx``, ``o+w``, ``o-x``, ``a-rwx``), judged on the
+  mode's end state from the directory's usual 755 start. The
+  standard secure modes on a home stay allowed (``700 ~``,
+  ``750 ~``), as do harmless modes (``755``, ``751``) and
+  non-guarded targets.
+- **``chattr +i`` on a guarded dir.** Making the tree immutable
+  locks it forever, so it is refused, recursive or not; ``-i``
+  (removing the flag) and ``+i`` on a single file stay allowed.
+- **Device writes via ``truncate`` / ``fallocate -l`` / ``wipe`` /
+  ``srm``.** ``truncate -s 0 /dev/sda`` sets the device's size,
+  ``fallocate -l 1G /dev/sda`` reserves space on it, and ``wipe`` /
+  ``srm`` are secure-delete tools in the same class as the
+  already-blocked ``shred`` — all four are now refused on a raw
+  device (symlink targets included). Truncating, allocating or
+  wiping a regular file stays allowed, and ``truncate -r`` only
+  reads its reference file.
+
 ## [0.6.40] - 2026-11-23
 
 ### Fixed
