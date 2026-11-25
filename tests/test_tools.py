@@ -462,6 +462,75 @@ def test_blocklist_guarded_tree_permission_nukes():
         assert _is_dangerous(cmd) is None, cmd
 
 
+def test_blocklist_guarded_tree_acl_xattr_rewrites():
+    """0.6.42: recursive setfacl/setfattr of a guarded dir.
+
+    The 0.6.41 audit follow-up closed recursive chown/chgrp/chmod of
+    a guarded tree but left the ACL / xattr twins open: ``setfacl -R
+    -m u:nobody:rwx /etc`` and ``setfattr -R -n user.x -v ... /etc``
+    rewrite a whole system tree's ACLs / extended attributes in one
+    command, exactly like the ``chown -R`` / ``chmod -R`` cases — all
+    verified against ``_is_dangerous`` before the fix. Any recursive
+    form is refused, whatever the operation: ``-m`` / ``-x`` /
+    ``--set`` / ``--restore`` for setfacl, ``-n`` / ``-x`` /
+    ``--restore`` for setfattr, and the read-only ones too
+    (``setfattr -g`` / ``-d``, ``setfacl --test``) since they still
+    walk the whole guarded tree. Recursion counts however it is
+    spelled — ``--recursive``, a clustered ``-Rm`` / ``-Rn``, or an
+    option permuted after the operands (getopt permutes) — and verbs
+    are matched by basename, so ``sudo`` / ``/usr/bin/`` prefixes are
+    caught. All cases use the pure-function scan: running the allowed
+    ones through exec would actually change the target. Precision
+    follows the rm guard: subdirectories stay allowed, as do
+    non-recursive operations (single-file or single-dir) and the
+    non-recursive reads.
+    """
+    from agentkai.tools import _is_dangerous
+    for cmd in ("setfacl -R -m u:nobody:rwx /etc",
+                "setfacl --recursive -m u:nobody:rwx /",
+                "setfacl -R -m u:nobody:rwx /home",
+                "setfacl -m u:nobody:rwx -R /etc",
+                "setfacl -R -x u:nobody /etc",
+                "setfacl --recursive --set u::rwx,g::r-x,o::r-x /usr",
+                "setfacl -Rm u:nobody:rwx /etc",
+                "setfacl -R -m u:nobody:rwx /etc/",
+                "setfacl -R -m u:nobody:rwx ~",
+                "setfacl -R -m u:nobody:rwx $HOME",
+                "setfacl -R -b /etc",
+                "setfacl -R -M /tmp/acls /etc",
+                "setfacl --recursive --restore=/tmp/acls /etc",
+                "setfacl -R -m u:nobody:rwx /etc ; echo done",
+                "setfacl --test -R -m u:nobody:rwx /etc",
+                "sudo setfacl -R -m u:nobody:rwx /etc",
+                "/usr/bin/setfacl -R -m u:nobody:rwx /etc",
+                "setfattr -R -n user.x -v foo /etc",
+                "setfattr --recursive -n user.x -v foo /",
+                "setfattr -R -x user.x /home",
+                "setfattr -n user.x -v foo -R /etc",
+                "setfattr -R -d /var",
+                "setfattr -R --restore=/tmp/xattrs /etc",
+                "setfattr -Rn user.x -v foo /etc",
+                "setfattr -R -g user.x /etc",
+                "sudo setfattr -R -n user.x -v foo /etc"):
+        assert _is_dangerous(cmd) is not None, cmd
+    for cmd in ("setfacl -R -m u:nobody:rwx /etc/myapp",
+                "setfacl -R -m u:nobody:rwx /home/user/project",
+                "setfacl -m u:nobody:rwx /etc/passwd",
+                "setfacl -m u:nobody:rwx /etc",
+                "setfacl -R -m u:nobody:rwx /tmp/x",
+                "setfacl --test -m u:nobody:rwx /etc",
+                "setfacl -R -m u:nobody:rwx /home/shared",
+                "setfattr -R -n user.x -v foo /etc/myapp",
+                "setfattr -R -n user.x -v foo /tmp/x",
+                "setfattr -n user.x -v foo /etc/passwd",
+                "setfattr -n user.x -v foo /etc",
+                "setfattr -g user.x /etc",
+                "setfattr -d /etc",
+                "setfattr -R -x user.x /home/user/project",
+                "setfacl -R -m u:nobody:rwx -- /tmp/x"):
+        assert _is_dangerous(cmd) is None, cmd
+
+
 def test_exec_blocklist_chmod_equivalent_mode_spellings():
     """chmod permission nukes in spellings the 0.6.15 pattern missed.
 

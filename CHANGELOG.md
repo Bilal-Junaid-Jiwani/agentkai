@@ -3,6 +3,35 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.42] - 2026-11-25
+
+### Fixed
+- **Exec blocklist: recursive setfacl/setfattr rewrites of a guarded
+  tree slipped past it.** The 0.6.41 audit follow-up closed
+  recursive chown/chgrp/chmod of a guarded tree but left the ACL /
+  xattr twins open: ``setfacl -R -m u:nobody:rwx /etc`` and
+  ``setfattr -R -n user.x -v ... /etc`` rewrite a whole system
+  tree's ACLs / extended attributes in one command, exactly like
+  the ``chown -R`` / ``chmod -R`` cases. Every bypass below was
+  reproduced against the old checker with pure-function verdict
+  calls before the fix, and each is pinned by a new regression
+  test; benign controls (subdir targets, single-file setfacl /
+  setfattr, non-recursive operations) are pinned too, and the full
+  suite is green.
+- **Recursive ACL / xattr rewrites of guarded trees.** Any
+  recursive setfacl / setfattr of ``/``, a home, the homes' parent
+  or a named system tree is now refused, whatever the ACL / xattr
+  operation (``-m`` / ``-x`` / ``--set`` / ``--restore``,
+  ``-n`` / ``-x`` / ``--restore`` — and the read-only ones too:
+  ``setfattr -g`` / ``-d`` and ``setfacl --test`` still walk the
+  whole guarded tree). Recursion counts however it is spelled —
+  ``--recursive``, a clustered ``-Rm`` / ``-Rn``, or an option
+  permuted after the operands (``setfacl -m u:x -R /etc``) — and
+  verbs are matched by basename, so ``sudo`` / ``/usr/bin/``
+  prefixes are caught. Subdirectories (``/etc/myapp``,
+  ``~/project``) stay allowed, exactly like the rm guard, as do
+  non-recursive operations and non-recursive reads.
+
 ## [0.6.41] - 2026-11-24
 
 ### Fixed

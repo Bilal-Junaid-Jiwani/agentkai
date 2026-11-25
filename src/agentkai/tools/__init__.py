@@ -1356,7 +1356,8 @@ def _chmod_mode_nukes_dir(mode: str, target: str) -> bool:
 
 
 def _tree_permission_reason(tokens: list[str]) -> str | None:
-    """``chown``/``chgrp``/``chmod``/``chattr`` rewriting a guarded tree.
+    """``chown``/``chgrp``/``chmod``/``chattr``/``setfacl``/``setfattr``
+    rewriting a guarded tree.
 
     The blocklist already refused a recursive delete of ``/``, a home
     or a named system tree, and a permission nuke of ``/`` itself —
@@ -1381,19 +1382,35 @@ def _tree_permission_reason(tokens: list[str]) -> str | None:
       nothing inside it can ever change again — so it is refused
       too, recursive or not (``-i`` only removes the flag, so it
       stays allowed).
+    - ``setfacl -R -m u:nobody:rwx /etc`` / ``setfattr -R -n user.x
+      -v ... /etc`` rewrite a whole system tree's ACLs / extended
+      attributes in one command — the same tree-wide rewrite as the
+      ``chown -R`` / ``chmod -R`` cases above, and the same gap the
+      0.6.41 audit follow-up left open. Any recursive setfacl /
+      setfattr of a guarded dir is refused, whatever the ACL / xattr
+      operation (``-m`` / ``-x`` / ``--set`` / ``--restore``,
+      ``-n`` / ``-x`` / ``--restore`` — and the read-only ones too:
+      ``setfattr -g`` / ``-d`` and ``setfacl --test`` still walk the
+      whole guarded tree, so the recursive form is refused the same
+      way; the non-recursive read stays allowed).
 
     Precision follows the rm guard exactly: subdirectories stay the
     caller's responsibility (``chmod -R 777 /etc/myapp``,
-    ``chown -R www-data /var/www/site``, ``chattr +i /tmp/x``),
-    non-recursive single-file chown/chmod (``chown root /etc/passwd``,
-    ``chmod 600 ~/.ssh/id_rsa``) and harmless modes (``755``,
-    ``700 ~``) stay allowed. Verbs are matched by basename, so
-    ``/bin/chmod`` and ``sudo chown`` are caught too; ``--reference``
-    modes are unpriceable, so only the recursive rule applies there.
+    ``chown -R www-data /var/www/site``, ``chattr +i /tmp/x``,
+    ``setfacl -R -m u:nobody:rwx /etc/myapp``,
+    ``setfattr -R -n user.x -v v /var/tmp/x``),
+    non-recursive single-file chown/chmod/setfacl/setfattr
+    (``chown root /etc/passwd``, ``chmod 600 ~/.ssh/id_rsa``,
+    ``setfacl -m u:nobody:rwx /etc/passwd``) and harmless modes
+    (``755``, ``700 ~``) stay allowed. Verbs are matched by basename,
+    so ``/bin/chmod`` and ``sudo chown`` are caught too;
+    ``--reference`` modes are unpriceable, so only the recursive rule
+    applies there.
     """
     for i, tok in enumerate(tokens):
         name = _basename(tok)
-        if name not in ("chown", "chgrp", "chmod", "chattr"):
+        if name not in ("chown", "chgrp", "chmod", "chattr",
+                        "setfacl", "setfattr"):
             continue
         args = _args_until_separator(tokens, i + 1)
         # GNU tools permute options, so -R/--recursive counts wherever
@@ -1480,16 +1497,53 @@ def _tree_permission_reason(tokens: list[str]) -> str | None:
         # chattr: the op is the first operand (+i / -i / =i); -p/-v
         # take values, the rest are flags. Only adding the immutable
         # bit locks a tree, and only a guarded dir counts as one.
-        operands, _shorts, _longs, _vals = _split_tool_args(
-            args, value_shorts=frozenset("pv"))
-        if not operands:
+        if name == "chattr":
+            operands, _shorts, _longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset("pv"))
+            if not operands:
+                continue
+            op = operands[0]
+            if len(op) < 2 or op[0] not in "+=" or "i" not in op[1:]:
+                continue
+            if any(_is_root_or_home(t) or _realpath_is_guarded(t)
+                   for t in operands[1:]):
+                return "immutable flag on a guarded directory"
             continue
-        op = operands[0]
-        if len(op) < 2 or op[0] not in "+=" or "i" not in op[1:]:
+        if name == "setfacl":
+            # -m/-x/-M/-X take a value (the ACL entry, or the file
+            # holding entries); --set/--set-file/--modify/--remove/
+            # --remove-file/--restore take one too. The operands left
+            # over are the target files. Recursion is read off the
+            # parsed flags, not the raw scan above: "-mR" is -m with
+            # value "R", not -R, and a -R after an operand still
+            # recurses (getopt permutes options past operands). Any
+            # recursive form is refused, whatever the operation —
+            # including --test, which still walks the whole tree.
+            operands, shorts, longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset("mMxX"),
+                value_longs=frozenset(
+                    ("set", "set-file", "modify", "remove",
+                     "remove-file", "restore")))
+            if ("R" in shorts or "recursive" in longs) and any(
+                    _is_root_or_home(t) or _realpath_is_guarded(t)
+                    for t in operands):
+                return "recursive ACL change of a guarded directory"
             continue
-        if any(_is_root_or_home(t) or _realpath_is_guarded(t)
-               for t in operands[1:]):
-            return "immutable flag on a guarded directory"
+        if name == "setfattr":
+            # -n/-v/-x/-g take a value (name / value); --restore takes
+            # the dump file. Any recursive form is refused, whatever
+            # the operation — including -g (get) and -d (dump), which
+            # still walk the whole guarded tree; the non-recursive
+            # read stays allowed. Recursion is read off the parsed
+            # flags, as for setfacl above.
+            operands, shorts, longs, _vals = _split_tool_args(
+                args, value_shorts=frozenset("nvxg"),
+                value_longs=frozenset(("restore",)))
+            if ("R" in shorts or "recursive" in longs) and any(
+                    _is_root_or_home(t) or _realpath_is_guarded(t)
+                    for t in operands):
+                return "recursive extended-attribute change of a guarded directory"
+            continue
     return None
 
 
