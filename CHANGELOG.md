@@ -3,6 +3,46 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.43] - 2026-11-26
+
+### Fixed
+- **Exec blocklist: a guarded tree vanishing without ``rm`` slipped
+  past it.** The recursive-delete, permission-nuke and ACL / xattr
+  rounds closed the ``rm`` / ``chown`` / ``chmod`` / ``setfacl`` /
+  ``setfattr`` spellings, but the same tree disappears just as
+  surely four other ways: ``rsync --delete`` mirrors the source
+  over the destination (``rsync -a --delete /tmp/empty/ /etc/``
+  empties ``/etc``), ``mv`` moves the whole tree away from where
+  the system expects it (``mv /etc /tmp/gone``), ``tar
+  --remove-files`` archives it and then removes it, and ``zip -m``
+  does the same. Every bypass below was reproduced against the old
+  checker with pure-function verdict calls before the fix, and each
+  is pinned by a new regression test; benign controls (subdir
+  targets, single files, non-delete rsync runs, remote rsync
+  destinations, plain archiving, tar extract / list modes) are
+  pinned too, and the full suite is green.
+- **``rsync --delete`` mirroring over a guarded tree.** Any
+  ``--delete*`` option (``--delete-before`` / ``-during`` /
+  ``-after`` / ``-delay`` / ``--delete-excluded``, and unambiguous
+  abbreviations such as ``--delete-b``) with a guarded destination
+  — ``/``, a home, the homes' parent or a named system tree — is
+  now refused. Remote destinations (``host:/etc/``) delete on the
+  host, so they are skipped the same way the raw-device check
+  skips remote scp targets.
+- **``mv`` of a guarded tree.** Any guarded dir among the sources
+  is now refused, including ``-t`` / ``--target-directory`` forms
+  where every operand is a source, and ``sudo`` / ``/bin/``
+  prefixes. Moving a file *into* a guarded dir stays allowed, as
+  do subdir sources.
+- **``tar --remove-files`` / ``zip -m`` of a guarded tree.**
+  Archiving a guarded dir with the delete-after-archiving flag —
+  ``tar`` in create / append / update mode with ``--remove-files``
+  (or its ``--remove`` abbreviation), ``zip -m`` / ``-rm`` — is
+  now refused, whatever the option order, with the archive file
+  and the other value-taking options consumed before members are
+  priced. Plain archiving without the flag stays allowed, as do
+  tar extract / list modes and ``zip -T``.
+
 ## [0.6.42] - 2026-11-25
 
 ### Fixed

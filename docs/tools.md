@@ -39,7 +39,9 @@ guarded paths (`/hom?`, `/{,}`), payloads nested in `sh -c '...'`,
 symbolic (`a+rwx`) mode spellings, shell operators glued to a
 command or path (`rm -rf /; ...`, `(rm -rf /)`, `echo hi;rm -rf /`),
 nested-shell payloads spelled without a standalone `-c` word
-(`sh -c'...'`, `sh -ec '...'`, `bash --norc -c '...'`), and backtick
+(`sh -c'...'`, `sh -ec '...'`, `bash --norc -c '...'`), a guarded
+tree vanishing without `rm` (`rsync --delete` mirroring over it,
+`mv` of it, `tar --remove-files`, `zip -m`), and backtick
 command substitution (`` `rm -rf /` ``).
 This
 is a blocklist, not a sandbox: it stops accidents and casual abuse, not a

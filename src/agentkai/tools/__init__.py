@@ -1547,6 +1547,139 @@ def _tree_permission_reason(tokens: list[str]) -> str | None:
     return None
 
 
+def _is_remote_rsync_dest(dest: str) -> bool:
+    """True if an rsync destination names another host, not a local path.
+
+    ``host:path``, ``user@host:path`` and ``rsync://host/module/path``
+    delete on the remote host, so the local blocklist has nothing to
+    price — exactly like the remote destinations the raw-device check
+    already skips for scp. A colon after the first slash is part of a
+    local name, not a host separator.
+    """
+    if dest.startswith("rsync://"):
+        return True
+    if "/" not in dest:
+        return ":" in dest
+    return ":" in dest.split("/", 1)[0]
+
+
+def _tree_vanish_reason(tokens: list[str]) -> str | None:
+    """A guarded tree that disappears without ``rm``.
+
+    The scan refused a recursive delete of ``/`` / a home / a named
+    system tree, but the same tree vanishes just as surely spelled
+    four other ways — each verified against ``_is_dangerous`` before
+    this fix, and each reproduced on scratch dirs, never on a
+    guarded tree:
+
+    - ``rsync --delete`` mirrors the source over the destination, so
+      ``rsync -a --delete /tmp/empty/ /etc/`` empties ``/etc`` to
+      match the empty source. Any ``--delete*`` long counts
+      (``--delete-before`` / ``-during`` / ``-after`` / ``-delay`` /
+      ``--delete-excluded``, and unambiguous abbreviations such as
+      ``--delete-b``); the destination is the last operand, exactly
+      like the raw-device check, and a remote destination (``host:
+      /etc/``) deletes on the host, so it is skipped the same way
+      the scp check skips one.
+    - ``mv`` of a guarded dir moves the whole tree away from where
+      the system expects it (``mv /etc /tmp/gone``) — the tree still
+      exists somewhere, but ``/etc`` is gone. Only sources count:
+      moving a file *into* a guarded dir is a write, not a wipe, and
+      with ``-t`` / ``--target-directory`` every operand is a
+      source.
+    - ``tar --remove-files`` deletes each file after archiving it,
+      so ``tar -cf /tmp/b.tar /etc --remove-files`` archives ``/etc``
+      and then removes it. Only the create / append / update modes
+      delete members, and members are the operands once the archive
+      file (``-f``) and the other value-taking options are consumed
+      (same value-option set as the archive-device check).
+    - ``zip -m`` deletes each file after adding it, so ``zip -rm
+      /tmp/b.zip /etc`` archives the tree and then removes it. The
+      first operand is the archive; the rest are members (same
+      value-option set as the archive-device check, plus the
+      exclude / include / compression-method options whose values
+      must never be mistaken for members).
+
+    Precision follows the rm guard: subdirectories (``/etc/myapp``,
+    ``~/project``) stay allowed, as do single files, non-delete
+    rsync runs, plain ``mv`` of a subdir, and archiving without the
+    delete flag.
+    """
+    for i, tok in enumerate(tokens):
+        name = _basename(tok)
+        args = _args_until_separator(tokens, i + 1)
+        if name == "rsync":
+            operands, _shorts, longs, _values = _split_tool_args(
+                args, value_shorts=frozenset("e"),
+                value_longs=frozenset((
+                    "rsh", "rsync-path", "log-file", "log-file-format",
+                    "password-file", "backup-dir", "suffix",
+                    "partial-dir", "temp-dir", "address", "port",
+                    "timeout", "bwlimit", "max-size", "min-size",
+                    "outformat")))
+            if not any(long == "delete" or long.startswith("delete-")
+                       for long in longs):
+                continue
+            if not operands:
+                continue
+            dest = operands[-1]
+            if _is_remote_rsync_dest(dest):
+                continue
+            if _is_root_or_home(dest) or _realpath_is_guarded(dest):
+                return "rsync --delete mirroring over / or home directory"
+            continue
+        if name == "mv":
+            operands, _shorts, _longs, values = _split_tool_args(
+                args, value_shorts=frozenset("St"),
+                value_longs=frozenset(("target-directory", "suffix")))
+            if not operands:
+                continue
+            if any(flag in ("t", "target-directory")
+                   for flag, _val in values):
+                sources = operands
+            else:
+                sources = operands[:-1]
+            if any(_is_root_or_home(s) or _realpath_is_guarded(s)
+                   for s in sources):
+                return "moving / or home directory away"
+            continue
+        if name == "tar":
+            operands, shorts, longs, _values = _split_tool_args(
+                args, value_shorts=frozenset("fFTCVXKNLbg"),
+                value_longs=frozenset((
+                    "file", "label", "exclude", "files-from",
+                    "info-script", "newer-mtime", "newer",
+                    "after-date", "transform", "xform", "directory",
+                    "listed-incremental", "tape-length",
+                    "blocking-factor", "starting-file",
+                    "exclude-from", "occurrence", "level", "sort",
+                    "format", "index-file")))
+            if not (shorts & {"c", "r", "u"} or longs & {
+                    "create", "append", "update"}):
+                continue
+            if not any(long == "remove"
+                       or long.startswith("remove-files")
+                       for long in longs):
+                continue
+            if any(_is_root_or_home(t) or _realpath_is_guarded(t)
+                   for t in operands):
+                return "tar --remove-files deleting a guarded directory"
+            continue
+        if name == "zip":
+            operands, shorts, _longs, _values = _split_tool_args(
+                args, value_shorts=frozenset("bPstnxiZ"))
+            if "m" not in shorts:
+                continue
+            if shorts & {"T", "h"}:
+                continue
+            members = operands[1:]
+            if any(_is_root_or_home(t) or _realpath_is_guarded(t)
+                   for t in members):
+                return "zip -m deleting a guarded directory"
+            continue
+    return None
+
+
 # Shell operators shlex never splits on (see _split_shell_operators).
 # Backtick is included: `` `rm -rf /` `` tokenizes with `` `rm`` and
 # ``/` `` as words, which neither the command nor the path checks
@@ -4301,8 +4434,11 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     the guarded set names the system trees (``/etc``, ``/usr``,
     ``/var``, ``/opt``, ``/srv``, ``/boot``, ``/bin``, ``/sbin``,
     ``/lib``, ``/lib64``, ``/sys``, ``/proc``, ``/dev``, ``/root``)
-    instead of deriving protection from passwd alone; same-command
-    assignments, ``${VAR:-default}`` expansions and ``$USER`` /
+    instead of deriving protection from passwd alone; a guarded
+    tree vanishing without ``rm`` is refused too — ``rsync
+    --delete`` mirroring over it, ``mv`` of it, and archive tools
+    deleting their inputs (``tar --remove-files``, ``zip -m``);
+    same-command assignments, ``${VAR:-default}`` expansions and ``$USER`` /
     ``$LOGNAME`` path components are priced before the verb checks,
     a recursive forced delete of one bare unresolved variable is
     refused, and ``xargs`` feeding a recursive ``rm`` or a device
@@ -4452,6 +4588,7 @@ def _is_dangerous(command: str, _depth: int = 0) -> str | None:
     tokens = _resolve_simple_assignments(tokens)
     return (_rm_reason(tokens) or _find_reason(tokens)
             or _chmod_reason(tokens) or _tree_permission_reason(tokens)
+            or _tree_vanish_reason(tokens)
             or _raw_device_reason(tokens)
             or _device_wipe_reason(tokens)
             or _format_device_reason(tokens)

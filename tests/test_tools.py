@@ -531,6 +531,89 @@ def test_blocklist_guarded_tree_acl_xattr_rewrites():
         assert _is_dangerous(cmd) is None, cmd
 
 
+def test_blocklist_guarded_tree_vanish_without_rm():
+    """0.6.43: a guarded tree vanishing without ``rm``.
+
+    The scan refused a recursive delete of ``/`` / a home / a named
+    system tree, but the same tree vanished just as surely spelled
+    four other ways — all verified against ``_is_dangerous`` before
+    the fix, and each reproduced on scratch dirs (never on a guarded
+    tree): ``rsync --delete`` mirrors the (empty) source over the
+    destination, ``mv`` moves the whole tree away from where the
+    system expects it, ``tar --remove-files`` archives it and then
+    removes it, and ``zip -m`` archives it and then removes it.
+    Delete spellings count however they are written — ``--delete``
+    variants and abbreviations (``--delete-b``), ``mv -t`` /
+    ``--target-directory``, ``tar --remove`` as an abbreviation of
+    ``--remove-files``, a clustered ``-rm`` for zip — and verbs are
+    matched by basename, so ``sudo`` / ``/bin/`` prefixes are caught.
+    All cases use the pure-function scan: running the allowed ones
+    through exec would actually change the target. Precision follows
+    the rm guard: subdirectories stay allowed, as do single files,
+    non-delete rsync runs, remote rsync destinations (which delete
+    on the host, not here), plain archiving, and extract / list
+    modes of tar.
+    """
+    from agentkai.tools import _is_dangerous
+    for cmd in ("rsync -a --delete /tmp/empty/ /etc/",
+                "rsync -a --delete /tmp/empty/ /home/hatch/",
+                "rsync --delete -r /tmp/empty/ /",
+                "rsync -a --delete-before /tmp/empty/ /etc",
+                "rsync -a --delete-b /tmp/empty/ /etc",
+                "rsync -a --delete-excluded /tmp/empty/ /var",
+                "rsync -a --delete /tmp/empty/ ~",
+                "rsync -a --delete /tmp/empty/ $HOME",
+                "rsync -a --delete /tmp/empty/ /home",
+                "sudo rsync -a --delete /tmp/empty/ /etc/",
+                "mv /etc /tmp/gone",
+                "mv /home/hatch /tmp/gone",
+                "mv / /tmp/gone",
+                "mv -t /tmp/gone /etc",
+                "mv --target-directory=/tmp/gone /home",
+                "sudo mv /etc /tmp/gone",
+                "/bin/mv /usr /tmp/gone",
+                "mv /etc /tmp/gone ; echo done",
+                "tar -cf /tmp/b.tar /etc --remove-files",
+                "tar --remove-files -cf /tmp/b.tar /home/hatch",
+                "tar --remove -czf /tmp/b.tgz /etc",
+                "tar -rf /tmp/b.tar /etc --remove-files",
+                "sudo tar -cf /tmp/b.tar / --remove-files",
+                "tar -cf /tmp/b.tar /etc/* --remove-files",
+                "zip -rm /tmp/b.zip /etc",
+                "zip -m /tmp/b.zip /home/hatch",
+                "zip -qrm /tmp/b.zip /",
+                "zip -m /tmp/b.zip /etc/*",
+                "sudo zip -rm /tmp/b.zip /var"):
+        assert _is_dangerous(cmd) is not None, cmd
+    for cmd in ("rsync -a /tmp/empty/ /etc/",
+                "rsync -a --delete /tmp/empty/ /etc/myapp",
+                "rsync -a --delete /tmp/empty/ /home/user/project",
+                "rsync -a --delete /tmp/empty/ /tmp/x",
+                "rsync -a --delete /tmp/empty/ host:/etc/",
+                "rsync -a --delete /tmp/empty/ user@host:/etc/",
+                "rsync -a --delete /tmp/empty/ rsync://host/mod/",
+                "rsync -a --delete /tmp/empty/ /etc/passwd",
+                "mv /etc/myapp /tmp/gone",
+                "mv /home/user/project /tmp/gone",
+                "mv /tmp/x /etc",
+                "mv /etc/passwd /tmp/",
+                "mv -t /tmp/gone /etc/myapp",
+                "mv --suffix .bak /tmp/x /tmp/y",
+                "tar -cf /tmp/b.tar /etc",
+                "tar --remove-files -cf /tmp/b.tar /etc/myapp",
+                "tar --remove-files -cf /tmp/b.tar /tmp/x",
+                "tar --remove-files -cf /tmp/b.tar /etc/passwd",
+                "tar -xf /tmp/b.tar /etc --remove-files",
+                "tar -tf /tmp/b.tar --remove-files",
+                "zip -r /tmp/b.zip /etc",
+                "zip -rm /tmp/b.zip /etc/myapp",
+                "zip -rm /tmp/b.zip /tmp/x",
+                "zip -m /tmp/b.zip /etc/passwd",
+                "zip -m /tmp/b.zip /tmp/x -x /etc/*",
+                "zip -Tm /tmp/b.zip /etc"):
+        assert _is_dangerous(cmd) is None, cmd
+
+
 def test_exec_blocklist_chmod_equivalent_mode_spellings():
     """chmod permission nukes in spellings the 0.6.15 pattern missed.
 
