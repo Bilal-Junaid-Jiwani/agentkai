@@ -390,6 +390,68 @@ def test_health_workouts(home_env):
     assert res[0]["calories"] == 300.0
 
 
+def _health_doctype_xml():
+    d1 = (date.today() - timedelta(days=1)).isoformat()
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE HealthData [
+<!ENTITY a "0123456789">
+<!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;">
+<!ENTITY c "&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;">
+]>
+<HealthData>
+ <Record type="HKQuantityTypeIdentifierStepCount" value="&c;" startDate="{d1} 08:00:00 +0500" endDate="{d1} 08:00:00 +0500"/>
+ <Record type="HKQuantityTypeIdentifierStepCount" value="4000" startDate="{d1} 08:00:00 +0500" endDate="{d1} 08:00:00 +0500"/>
+</HealthData>
+"""
+
+
+def test_health_xml_doctype_refused(home_env):
+    """A DOCTYPE in export.xml is refused outright: the stdlib parser
+    expands internal entities while reading, so the nested-entity
+    payload below expands 1000x in memory before the record cap is
+    consulted. The genuine 4000-step record after the payload must
+    not count either — the whole file is refused, not scrubbed."""
+    hdir = home_env / "health"
+    hdir.mkdir(parents=True, exist_ok=True)
+    (hdir / "export.xml").write_text(_health_doctype_xml(),
+                                     encoding="utf-8")
+    assert health_tools._scan_xml(hdir / "export.xml") == ({}, {}, [])
+    tools = health_tools.get_tools({"home": home_env})
+    res = by_name(tools, "health_summary").func(days=30)
+    assert res["days_with_step_data"] == 0
+    assert res["avg_daily_steps"] == 0.0
+
+
+def test_health_xml_doctype_utf16_refused(home_env):
+    """The same refusal holds for a UTF-16 export (BOM): the DOCTYPE
+    marker is found after decoding, not by byte search."""
+    hdir = home_env / "health"
+    hdir.mkdir(parents=True, exist_ok=True)
+    (hdir / "export.xml").write_bytes(
+        _health_doctype_xml().encode("utf-16"))
+    assert health_tools._scan_xml(hdir / "export.xml") == ({}, {}, [])
+
+
+def test_health_xml_prolog_markup_allowed(home_env):
+    """Benign control: comments and processing instructions in the
+    prolog are not a DOCTYPE, so an export carrying them still
+    parses."""
+    hdir = home_env / "health"
+    hdir.mkdir(parents=True, exist_ok=True)
+    d1 = (date.today() - timedelta(days=1)).isoformat()
+    xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!-- exported from Health app -->
+<?health-export version="1"?>
+<HealthData>
+ <Record type="HKQuantityTypeIdentifierStepCount" value="4000" startDate="{d1} 08:00:00 +0500" endDate="{d1} 08:00:00 +0500"/>
+</HealthData>
+"""
+    (hdir / "export.xml").write_text(xml, encoding="utf-8")
+    assert not health_tools._has_doctype(hdir / "export.xml")
+    steps, _sleep, _workouts = health_tools._scan_xml(hdir / "export.xml")
+    assert steps == {d1: 4000.0}
+
+
 # ---- payments ----------------------------------------------------------------
 
 PI_OK = {"id": "pi_test123", "amount": 1000, "currency": "usd",

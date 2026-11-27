@@ -3,6 +3,27 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.44] - 2026-11-27
+
+### Fixed
+- **Health export parser expanded XML entities while reading.**
+  The 2026-11-23 security audit listed this one as unverified —
+  stdlib ElementTree does not resolve external entities, so it
+  looked safe — but it does expand *internal* entities declared
+  in a DOCTYPE, and a nested-entity ("billion laughs") payload in
+  an attribute value would expand exponentially in memory before
+  the 200,000-record cap is ever consulted: a three-level entity
+  chain expands 1000x under plain ``ET.fromstring`` (verified
+  before this fix). Apple Health exports never carry a DOCTYPE,
+  so ``export.xml`` files declaring one are now refused outright
+  (UTF-8 and UTF-16 alike; only the prolog is scanned, in chunks,
+  so the export itself is never loaded whole). The refusal is
+  pinned by regression tests — a DOCTYPE file with a genuine
+  4000-step record after the payload contributes zero steps, a
+  UTF-16 twin is refused the same way — and a benign control
+  (comments and processing instructions in the prolog, no
+  DOCTYPE) still parses.
+
 ## [0.6.43] - 2026-11-26
 
 ### Fixed

@@ -24,7 +24,9 @@ Tools:
 **iPhone (Apple Health):** Health app → profile picture → *Export All
 Health Data* → unzip → copy `export.xml` into `~/.agentkai/health/`.
 (Exports can be hundreds of MB; the tool streams the XML and caps
-records, so it's slow but safe.)
+records, so it's slow but safe. A file carrying a DOCTYPE declaration
+is refused outright — the parser would otherwise expand entity
+definitions while reading, and real exports never carry one.)
 
 **Android (Health Connect):** Health Connect app → *Export data* (or a
 companion app that exports CSV) → place files in `~/.agentkai/health/`.

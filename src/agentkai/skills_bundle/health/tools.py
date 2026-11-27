@@ -6,6 +6,7 @@ File-import only — no device sync exists. Reads ~/.agentkai/health/:
 """
 from __future__ import annotations
 
+import codecs
 import csv
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta, timezone
@@ -16,6 +17,12 @@ from agentkai.skills_bundle._common import home_dir
 from agentkai.tools import Tool
 
 MAX_XML_RECORDS = 200_000  # safety cap for huge HealthKit exports
+
+# A DOCTYPE can only appear in the XML prolog, before the root element;
+# a real Apple Health export's prolog is one short line, so scanning
+# the first 64 KiB per read up to 1 MiB of prolog is ample.
+_PROLOG_CHUNK = 65536
+_PROLOG_MAX = 1 << 20
 
 _STEP_TYPE = "HKQuantityTypeIdentifierStepCount"
 _SLEEP_TYPE = "HKCategoryTypeIdentifierSleepAnalysis"
@@ -69,6 +76,86 @@ def _read_csv_rows(path: Path) -> list[dict]:
         return []
 
 
+def _prolog_has_doctype(text: str) -> bool | None:
+    """Scan an XML prolog prefix for a DOCTYPE declaration.
+
+    Returns True if a DOCTYPE is present, False once the root element
+    starts (nothing after it can be a DOCTYPE), None if the prefix
+    ends mid-construct and more data is needed to decide. The XML
+    declaration, processing instructions and comments are skipped
+    the way the parser skips them; any other ``<!`` markup in the
+    prolog is a DOCTYPE (or malformed input), so it refuses too.
+    A lone trailing ``<`` is undecided — it may be the start of
+    anything, split across a chunk boundary.
+    """
+    i = 0
+    n = len(text)
+    while True:
+        while i < n and text[i] in " \t\r\n\ufeff":
+            i += 1
+        if i >= n:
+            return None
+        if i == n - 1 and text[i] == "<":
+            return None
+        if text.startswith("<?", i):
+            end = text.find("?>", i + 2)
+            if end < 0:
+                return None
+            i = end + 2
+            continue
+        if text.startswith("<!--", i):
+            end = text.find("-->", i + 4)
+            if end < 0:
+                return None
+            i = end + 3
+            continue
+        if text.startswith("<!", i):
+            return True
+        if text.startswith("<", i):
+            return False
+        # Junk before the root element: not a well-formed export;
+        # let the parser below report it as usual.
+        return False
+
+
+def _has_doctype(path: Path) -> bool:
+    """True if the export declares a DOCTYPE in its prolog.
+
+    Apple Health exports never carry one, and a DOCTYPE is the only
+    way to declare entities — while the stdlib parser expands
+    internal entities as it reads. A nested-entity ("billion
+    laughs") payload in an attribute value would therefore expand
+    exponentially in memory before the record cap is ever consulted
+    (verified: a three-level entity chain expands 1000x under plain
+    ``ET.fromstring``). Only the prolog is scanned, in chunks, so
+    the export itself is never loaded whole; UTF-8 and UTF-16 (BOM)
+    exports are both handled. A prolog that stays undecided past
+    the cap is refused rather than scanned forever.
+    """
+    try:
+        fh = path.open("rb")
+    except OSError:
+        return False
+    with fh:
+        encoding = "utf-8"
+        text = ""
+        total = 0
+        while total < _PROLOG_MAX:
+            chunk = fh.read(_PROLOG_CHUNK)
+            if not chunk:
+                break
+            total += len(chunk)
+            if not text:
+                if chunk.startswith((codecs.BOM_UTF16_LE,
+                                     codecs.BOM_UTF16_BE)):
+                    encoding = "utf-16"
+            text += chunk.decode(encoding, errors="replace")
+            verdict = _prolog_has_doctype(text)
+            if verdict is not None:
+                return verdict
+        return True
+
+
 def _scan_xml(path: Path) -> tuple[dict[str, float], dict[str, float],
                                    list[dict]]:
     """Stream export.xml -> (steps_by_day, sleep_hours_by_day, workouts)."""
@@ -76,6 +163,10 @@ def _scan_xml(path: Path) -> tuple[dict[str, float], dict[str, float],
     sleep: dict[str, float] = {}
     workouts: list[dict] = []
     count = 0
+    if _has_doctype(path):
+        # Refuse the file rather than let a crafted export expand
+        # entity payloads in memory while parsing.
+        return steps, sleep, workouts
     try:
         context = ET.iterparse(str(path), events=("end",))
     except ET.ParseError:
