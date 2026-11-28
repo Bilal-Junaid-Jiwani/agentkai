@@ -440,6 +440,28 @@ async def test_scheduler_create_validates(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_scheduler_create_rejects_impossible_dates(tmp_path):
+    """docs/scheduler.md promises the dashboard applies the same schedule
+    validation as `agentkai scheduler add`: an impossible date such as
+    "0 0 31 2 *" is a 400, not an unhandled 500 from Scheduler.add —
+    and a Feb-29 schedule is accepted, firing on leap days."""
+    sched, c = _sched_client(tmp_path)
+    bad = [dict(_PAYLOAD, schedule="0 0 31 2 *"),
+           dict(_PAYLOAD, schedule="0 0 31 4 *")]
+    async with c:
+        for payload in bad:
+            r = await c.post(f"/api/scheduler/jobs?token={TOKEN}",
+                             json=payload)
+            assert r.status_code == 400, (payload, r.text)
+            assert "can never fire" in r.text
+        r = await c.post(f"/api/scheduler/jobs?token={TOKEN}",
+                         json=dict(_PAYLOAD, schedule="0 0 29 2 *"))
+    assert r.status_code == 201, r.text
+    assert sched.get("morning-brief").schedule == "0 0 29 2 *"
+    sched.close()
+
+
+@pytest.mark.asyncio
 async def test_scheduler_create_one_shot(tmp_path):
     sched, c = _sched_client(tmp_path)
     payload = dict(_PAYLOAD, name="once", job_type="at",

@@ -491,11 +491,30 @@ class Scheduler:
             return {"name": name, "status": "skipped",
                     "summary": "job disabled"}
         if job.command and not job.prompt:
-            # Legacy shell job: keep v0 behavior.
+            # Legacy shell job: keep v0 behavior. A refusal at run time
+            # (a job stored before the blocklist check existed, or
+            # written to the store directly) is an error, not a success:
+            # the old code reported it as status "done" with summary
+            # "shell exit None" and left no trace in job_runs. Shell
+            # runs are recorded like agent runs, so the history the
+            # heartbeat reviews ("jobs that failed") sees them too, and
+            # one-shot shell jobs are disabled after running, as agent
+            # one-shots are below.
+            started = _now()
             out = self.run_once(name)
-            return {"name": name, "status": "done",
-                    "summary": f"shell exit {out.get('exit_code')}",
-                    **out}
+            finished = _now()
+            if "error" in out:
+                status = "error"
+                summary = out["error"]
+            else:
+                status = "done"
+                summary = f"shell exit {out.get('exit_code')}"
+            self._record_run(name, started, finished, status, summary)
+            if job.is_oneshot:
+                self._set_enabled(name, False)
+            return {"name": name, "status": status, "summary": summary,
+                    "started_ts": started.isoformat(),
+                    "finished_ts": finished.isoformat(), **out}
         prompt = self._prompt_for(job)
         started = _now()
         try:

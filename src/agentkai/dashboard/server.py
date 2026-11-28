@@ -36,7 +36,7 @@ from ..agent import Agent
 from ..memory import Memory
 from ..permissions import Action, PermissionGate
 from ..providers import ALIASES, ProviderConfig, resolve_model
-from ..scheduler import Job, Scheduler, parse_at, parse_cron
+from ..scheduler import Job, Scheduler, parse_at, validate_schedule
 from ..tools import _is_dangerous, default_registry
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -192,8 +192,14 @@ def _validate_job_payload(body: JobUpsertRequest) -> Job:
     try:
         if body.job_type == "at":
             parse_at(schedule)
+        elif schedule.startswith("@at:"):
+            raise ValueError("only 'at' jobs use @at: schedules")
         else:
-            parse_cron(schedule)
+            # Same validation as `agentkai scheduler add` (see
+            # docs/scheduler.md): impossible dates such as "0 0 31 2 *"
+            # are rejected here with a 400 instead of reaching
+            # Scheduler.add and surfacing as a 500.
+            validate_schedule(schedule)
     except ValueError as exc:
         raise HTTPException(400, f"bad schedule: {exc}") from exc
     prompt = (body.prompt or "").strip()
@@ -570,7 +576,12 @@ def create_app(token: str | None = None,
     async def scheduler_job_create(body: JobUpsertRequest):
         job = _validate_job_payload(body)
         created = scheduler.get(job.name) is None
-        scheduler.add(job)
+        try:
+            scheduler.add(job)
+        except ValueError as exc:
+            # The store is the source of truth for what it accepts; any
+            # validation it adds later surfaces as a 400, never a 500.
+            raise HTTPException(400, f"bad job: {exc}") from exc
         return JSONResponse({"ok": True, "name": job.name,
                              "created": created, "job": _job_json(job)},
                             status_code=201 if created else 200)

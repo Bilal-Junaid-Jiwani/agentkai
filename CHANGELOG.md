@@ -3,6 +3,35 @@
 All notable changes to agentkai are documented here. Versioning follows
 [SemVer](https://semver.org/): MINOR for features, PATCH for fixes.
 
+## [0.6.45] - 2026-11-28
+
+### Fixed
+- **Dashboard job creation returned a 500 for impossible cron
+  schedules.** `POST /api/scheduler/jobs` with a schedule like
+  `"0 0 31 2 *"` passed the dashboard's own `parse_cron` check, then
+  `Scheduler.add` rejected it with an unhandled `ValueError` — a 500
+  instead of the 400 the API doc (`dashboard/API.md`) and
+  `docs/scheduler.md` both promise ("the same validation applies to
+  jobs created through the dashboard API", as the CLI's
+  `scheduler add` already does). The dashboard now validates with
+  `validate_schedule` (keeping `@at:` for `at` jobs only), and any
+  `ValueError` from the store surfaces as a 400, never a 500. Pinned
+  by a dashboard test: Feb-31 / Apr-31 → 400 naming the schedule,
+  Feb-29 → 201.
+- **`run_job` reported a refused shell job as "done".** A legacy shell
+  job refused at run time (stored before the blocklist check existed,
+  or written to the store directly) came back as `status: "done"`
+  with summary `"shell exit None"`, left no trace in `job_runs`, and
+  a one-shot shell job stayed enabled — while agent jobs get an error
+  status, a recorded run, and one-shot disable. Shell runs now get
+  the same treatment: refusals return `status: "error"` with the
+  refusal as the summary, every shell run (success or refusal) is
+  recorded in `job_runs` with timestamps, and one-shot shell jobs are
+  disabled after running. That also makes the heartbeat's "jobs that
+  failed" review see shell failures, which were previously invisible
+  to it. Pinned by scheduler tests (refusal path stubbed at the gate;
+  no checker input involved).
+
 ## [0.6.44] - 2026-11-27
 
 ### Fixed

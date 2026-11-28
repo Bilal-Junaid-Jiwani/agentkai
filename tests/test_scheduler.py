@@ -524,3 +524,59 @@ def test_validate_schedule_rejects_non_string():
     for bad in (42, None, 3.5, ["0 2 * * *"]):
         with pytest.raises(ValueError):
             validate_schedule(bad)
+
+
+def test_run_job_shell_refusal_is_error_not_done(tmp_path, monkeypatch):
+    """A legacy shell job refused at run time (stored before the blocklist
+    check, or written to the store directly) used to come back from
+    run_job as status "done" with summary "shell exit None" and no trace
+    in job_runs. It is an error, and the failure is recorded.
+
+    The refusal is stubbed at the gate (no real checker input here): the
+    point under test is run_job's handling of run_once's error dict.
+    """
+    monkeypatch.setattr(
+        Scheduler, "_command_block_reason",
+        staticmethod(lambda command: "refused in test"))
+    s = Scheduler(db=tmp_path / "sched.db")
+    s.conn.execute(
+        "INSERT OR REPLACE INTO jobs (name, schedule, command, prompt,"
+        " model_alias, job_type, enabled, last_run, created_ts) VALUES"
+        " ('stored', '0 2 * * *', 'echo hi', '', 'claude', 'cron', 1,"
+        " '', '')")
+    s.conn.commit()
+    called = []
+    import agentkai.scheduler as sched_mod
+    monkeypatch.setattr(
+        sched_mod.subprocess, "run", lambda *a, **k: called.append(a))
+    res = s.run_job("stored")
+    assert res["status"] == "error"
+    assert "refused in test" in res["summary"]
+    assert res.get("error") and "refused in test" in res["error"]
+    assert called == []  # nothing executed
+    runs = s.job_runs("stored")
+    assert len(runs) == 1 and runs[0]["status"] == "error"
+    s.close()
+
+
+def test_run_job_shell_success_records_run_and_disables_oneshot(tmp_path):
+    """A shell job that runs reports "done" with its exit code, lands in
+    job_runs like an agent job, and a one-shot shell job is disabled
+    after running (parity with agent one-shots)."""
+    s = Scheduler(db=tmp_path / "sched.db")
+    s.add(Job(name="disk-check", schedule="*/15 * * * *",
+              command="echo hi"))
+    res = s.run_job("disk-check")
+    assert res["status"] == "done"
+    assert res["summary"] == "shell exit 0"
+    assert "hi" in res.get("output", "")
+    assert res["started_ts"] and res["finished_ts"]
+    runs = s.job_runs("disk-check")
+    assert len(runs) == 1 and runs[0]["status"] == "done"
+
+    s.add(Job(name="once-shell", schedule="@at:2026-09-29T10:00",
+              command="echo once", job_type="at"))
+    res = s.run_job("once-shell")
+    assert res["status"] == "done"
+    assert s.get("once-shell").enabled is False
+    s.close()
